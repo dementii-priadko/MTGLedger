@@ -1,6 +1,8 @@
+import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -34,6 +36,13 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
 DEV_LOGIN = os.environ.get("DEV_LOGIN") == "1"
 AUTH_MAX_AGE = 3600  # reject Telegram auth payloads older than this (they end up in logs/history)
+# Bot login: "Log in with Telegram" opens the bot, which replies with a signed link to /auth/telegram.
+# Needs the bot's webhook (registered at startup when PUBLIC_URL and the secret are set).
+WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+BOT_LOGIN = bool(BOT_TOKEN and BOT_USERNAME and WEBHOOK_SECRET)
+
+log = logging.getLogger("ledger")
 
 FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
@@ -75,16 +84,27 @@ def init_db():
 
 # --- auth -------------------------------------------------------------------
 
+def telegram_auth_hash(data):
+    """The Login Widget signature: HMAC-SHA256 of the sorted key=value lines, keyed by SHA256(bot token)."""
+    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data))
+    secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
+    return hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+
+
+def safe_path(path):
+    """A same-site path to redirect to after login, or None."""
+    if isinstance(path, str) and path.startswith("/") and not path.startswith(("//", "/\\")) and "\\" not in path:
+        return path
+    return None
+
+
 def verify_telegram_auth(data):
     """Check a Telegram Login Widget payload, per https://core.telegram.org/widgets/login#checking-authorization"""
     data = dict(data)
     received_hash = data.pop("hash", "")
     if not BOT_TOKEN or not received_hash:
         return False
-    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data))
-    secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
-    expected = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, received_hash):
+    if not hmac.compare_digest(telegram_auth_hash(data), received_hash):
         return False
     try:
         return time.time() - int(data.get("auth_date", 0)) <= AUTH_MAX_AGE
@@ -130,7 +150,9 @@ def upsert_telegram_user(tg):
         # Another real account may still hold this username (they renamed since); release it.
         db.execute("UPDATE users SET username = NULL WHERE lower(username) = lower(%s) AND id <> %s", (username, user_id))
     db.execute(
-        "UPDATE users SET username = %s, first_name = %s, last_name = %s, photo_url = %s WHERE id = %s",
+        # Bot logins carry no photo, so keep the one we have.
+        "UPDATE users SET username = %s, first_name = %s, last_name = %s, photo_url = COALESCE(%s, photo_url) "
+        "WHERE id = %s",
         (username, *profile, user_id),
     )
     db.commit()
@@ -141,7 +163,9 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if g.user is None:
-            return redirect(url_for("login"))
+            # Remember where they were going (GET pages only) so the bot login can bring them back.
+            wanted = request.full_path.rstrip("?") if request.method == "GET" and request.path != "/" else None
+            return redirect(url_for("login", next=wanted))
         return view(*args, **kwargs)
     return wrapped
 
@@ -266,8 +290,106 @@ def login():
             "return_to": origin + url_for("login"),
             "lang": g.lang,
         })
+    bot_login_url = bot_login_link(request.args.get("next")) if BOT_LOGIN else None
     return render_template("login.html", bot_username=BOT_USERNAME, dev_login=DEV_LOGIN,
-                           redirect_login_url=redirect_login_url)
+                           redirect_login_url=redirect_login_url, bot_login_url=bot_login_url)
+
+
+# --- login through the bot -------------------------------------------------------
+
+def bot_login_link(next_path=None):
+    """t.me deep link; the start parameter carries the page to come back to (base64url, Telegram's charset)."""
+    path = safe_path(next_path) or "/"
+    encoded = base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
+    param = f"login_{encoded}" if len(encoded) <= 58 else "login"   # start parameters are capped at 64 chars
+    return f"https://t.me/{BOT_USERNAME}?start={param}"
+
+
+def decode_start_path(param):
+    encoded = param[len("login_"):] if param.startswith("login_") else ""
+    try:
+        path = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+    except ValueError:
+        return "/"
+    return safe_path(path) or "/"
+
+
+def signed_login_url(tg_user, path):
+    """A /auth/telegram link signed exactly like the Login Widget would sign it, for this Telegram user."""
+    data = {key: str(tg_user[key]) for key in ("id", "first_name", "last_name", "username") if tg_user.get(key)}
+    data.update(auth_date=str(int(time.time())), redirect=path)
+    data["hash"] = telegram_auth_hash(data)
+    base = PUBLIC_URL or request.host_url.rstrip("/")
+    return f"{base}/auth/telegram?{urllib.parse.urlencode(data)}"
+
+
+def telegram_api(method, **params):
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", data=json.dumps(params).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10, context=SSL_CONTEXT) as resp:
+        result = json.load(resp)
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram {method} failed: {result}")
+    return result.get("result")
+
+
+def bot_text(lang, text, **kwargs):
+    return i18n.gettext(lang, text, **kwargs)
+
+
+def bot_lang(tg_user):
+    return "uk" if (tg_user or {}).get("language_code", "").startswith("uk") else i18n.DEFAULT
+
+
+@app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not WEBHOOK_SECRET or not hmac.compare_digest(secret, WEBHOOK_SECRET):
+        abort(403)
+    try:
+        handle_bot_update(request.get_json(silent=True) or {})
+    except Exception:
+        # Answer 200 anyway so Telegram doesn't retry the same update forever.
+        log.exception("failed to handle Telegram update")
+    return {"ok": True}
+
+
+def handle_bot_update(update):
+    message = update.get("message")
+    if not message or message.get("chat", {}).get("type") != "private" or not message.get("from"):
+        return
+    user, chat_id = message["from"], message["chat"]["id"]
+    lang = bot_lang(user)
+    text = (message.get("text") or "").strip()
+    command, _, arg = text.partition(" ")
+    if command == "/login" or (command == "/start" and arg.startswith("login")):
+        telegram_api(
+            "sendMessage", chat_id=chat_id,
+            text=bot_text(lang, "Tap the button to log in to Card Ledger. The link works for one hour — don’t share it."),
+            reply_markup={"inline_keyboard": [[{"text": bot_text(lang, "Log in to Card Ledger"),
+                                                "url": signed_login_url(user, decode_start_path(arg))}]]},
+        )
+    else:
+        telegram_api(
+            "sendMessage", chat_id=chat_id,
+            text=bot_text(lang, "Hi! This bot logs you in to Card Ledger. Send /login any time to get a login link."),
+            reply_markup={"inline_keyboard": [[{"text": bot_text(lang, "Open Card Ledger"),
+                                                "url": PUBLIC_URL or request.host_url}]]},
+        )
+
+
+def register_webhook():
+    """Point the bot's updates at us (production only: needs PUBLIC_URL)."""
+    if not (BOT_LOGIN and PUBLIC_URL):
+        return
+    try:
+        telegram_api("setWebhook", url=f"{PUBLIC_URL}/telegram/webhook", secret_token=WEBHOOK_SECRET,
+                     allowed_updates=["message"], drop_pending_updates=True)
+        telegram_api("setMyCommands", commands=[{"command": "login", "description": "Log in to Card Ledger"}])
+    except Exception:
+        log.exception("could not register the Telegram webhook")
 
 
 @app.route("/auth/telegram")
@@ -278,7 +400,8 @@ def auth_telegram():
     session.clear()
     session["user_id"] = upsert_telegram_user(request.args)
     session.permanent = True
-    return redirect(url_for("index"))
+    # Links from the bot carry a (signed) page to return to.
+    return redirect(safe_path(request.args.get("redirect")) or url_for("index"))
 
 
 @app.route("/auth/dev", methods=["POST"])
@@ -795,6 +918,7 @@ def delete_loan(loan_id):
 
 
 init_db()
+register_webhook()
 
 if __name__ == "__main__":
     app.run(debug=True, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 3000)))

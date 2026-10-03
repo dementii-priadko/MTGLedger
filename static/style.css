@@ -506,6 +506,16 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--lent); mar
 .fan-card.c3 { background: linear-gradient(160deg, #ff8a6b, #a8321c); transform: rotate(18deg); }
 .fan-card.c2::before { background: linear-gradient(115deg, rgba(255, 120, 200, .45), rgba(120, 220, 255, .45), rgba(255, 250, 150, .45)); }
 .tg-widget { min-height: 44px; margin-top: 8px; }
+.btn-telegram { height: 50px; padding: 0 22px; margin-top: 8px; border: 0; border-radius: 12px; background: #0088cc; color: #fff; font-size: 16px; box-shadow: 0 6px 20px rgba(0, 136, 204, .35); }
+.btn-telegram:hover { background: #0077b3; }
+.btn-telegram svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
+.login-hint { font-size: 13px; max-width: 32ch; }
+.other-login { width: 100%; font-size: 14px; }
+.other-login summary { cursor: pointer; color: var(--muted); list-style: none; padding: 6px; }
+.other-login summary::-webkit-details-marker { display: none; }
+.other-login summary::after { content: " ▾"; }
+.other-login[open] summary::after { content: " ▴"; }
+.other-login[open] { display: grid; justify-items: center; gap: 10px; }
 .alt-login { font-size: 13px; }
 .dev-login { display: grid; gap: 6px; width: 100%; margin-top: 12px; padding-top: 18px; border-top: 1px dashed var(--border-strong); text-align: left; }
 .dev-login-row { display: flex; gap: 8px; }

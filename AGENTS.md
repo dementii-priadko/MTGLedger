@@ -52,9 +52,14 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
 - Card validation happens server-side through one Scryfall `/cards/collection` call
   (`scryfall_cards`); only v4 UUIDs are sent (Scryfall 400s on others).
 - The person page (`/people/<id>`) 404s unless the viewer has loans with that person: no user browsing.
-- Telegram login: HMAC check in `verify_telegram_auth`, payloads older than 24h rejected. There is also a
-  full-page redirect flow (`oauth.telegram.org/auth` → `/login#tgAuthResult=…`) for browsers where the
-  widget iframe fails (Firefox-based browsers).
+- Telegram login, three ways, all ending at `/auth/telegram` (HMAC check in `verify_telegram_auth`,
+  payloads older than 1h rejected):
+  1. **Bot link (primary):** the login page links to `t.me/<bot>?start=login_<base64url(path)>`; the bot
+     (webhook `/telegram/webhook`, secret header) replies with a button to `/auth/telegram?…&redirect=…`
+     signed the same way the Login Widget signs (`signed_login_url`). `/login` in the bot does the same.
+     `redirect` is part of the signed data and must pass `safe_path`.
+  2. The Login Widget iframe ("Other ways to log in").
+  3. The widget's full-page redirect flow for browsers where the iframe fails (Firefox-based).
 
 ## Schema changes
 

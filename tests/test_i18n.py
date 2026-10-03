@@ -24,7 +24,8 @@ def placeholders(text):
 
 
 def test_every_ui_string_has_a_ukrainian_translation():
-    singles = calls(r"(?<![\w.])(?:_|t)\(\s*" + STR) | set(ledger.FINISHES.values())
+    singles = (calls(r"(?<![\w.])(?:_|t)\(\s*" + STR) | calls(r"bot_text\(\s*\w+,\s*" + STR)
+               | set(ledger.FINISHES.values()))
     plurals = calls(r"(?<![\w.])(?:_n|tn)\(\s*" + STR)
     assert singles and plurals
     assert sorted(singles - i18n.UK.keys()) == []

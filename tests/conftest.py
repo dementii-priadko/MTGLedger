@@ -5,6 +5,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://ledger:ledger@localhost:5433
 os.environ["TELEGRAM_BOT_TOKEN"] = "123:test-token"
 os.environ["TELEGRAM_BOT_USERNAME"] = "test_bot"
 os.environ["DEV_LOGIN"] = "1"
+os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-webhook-secret"
 os.environ["SECRET_KEY"] = "test"
 
 import psycopg
