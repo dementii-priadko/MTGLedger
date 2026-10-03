@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ g.lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='17' height='24' rx='3' fill='%23e3b65a' transform='rotate(12 17 15)'/%3E%3Crect x='5' y='5' width='17' height='24' rx='3' fill='%23161a20' stroke='%23e3b65a' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+SC:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -21,10 +21,10 @@
       <nav class="topbar-actions">
         <a href="{{ url_for('new_loan') }}" class="btn btn-primary">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
-          <span>New loan</span>
+          <span>{{ _("New loan") }}</span>
         </a>
         <details class="menu">
-          <summary aria-label="Account">
+          <summary aria-label="{{ _("Account") }}">
             {% set me = person(g.user.username, g.user.first_name) %}
             {% if g.user.photo_url %}<img class="avatar" src="{{ g.user.photo_url }}" alt="">
             {% else %}<span class="avatar" style="--hue: {{ avatar_hue(me) }}">{{ me.lstrip('@')[:1]|upper }}</span>{% endif %}
@@ -34,7 +34,13 @@
               <strong>{{ g.user.first_name or me }}</strong>
               {% if g.user.username %}<span class="muted">@{{ g.user.username }}</span>{% endif %}
             </div>
-            <form method="post" action="{{ url_for('logout') }}"><button class="menu-item">Log out</button></form>
+            <div class="menu-langs" role="group" aria-label="{{ _("Language") }}">
+              {% for code, label in languages.items() %}
+                <a class="menu-lang {{ 'active' if code == g.lang }}" href="{{ url_for('set_language', code=code) }}" lang="{{ code }}"
+                   {% if code == g.lang %}aria-current="true"{% endif %}>{{ label }}</a>
+              {% endfor %}
+            </div>
+            <form method="post" action="{{ url_for('logout') }}"><button class="menu-item">{{ _("Log out") }}</button></form>
           </div>
         </details>
       </nav>
@@ -52,6 +58,22 @@
     {% block content %}{% endblock %}
   </main>
   <script>
+    // Translations for page scripts: t(englishText, vars) and tn(singular, plural, n, vars).
+    window.I18N = {{ js_i18n|tojson }};
+    (() => {
+      const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
+      const pluralIndex = (n) => {
+        if (I18N.lang !== "uk") return n === 1 ? 0 : 1;
+        const a = Math.abs(n), d = a % 10, h = a % 100;
+        return d === 1 && h !== 11 ? 0 : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 1 : 2;
+      };
+      window.t = (s, vars = {}) => fill(I18N.strings[s] ?? s, vars);
+      window.tn = (one, many, n, vars = {}) => {
+        const forms = I18N.plurals[one];
+        return fill(forms ? forms[pluralIndex(n)] : n === 1 ? one : many, { n, ...vars });
+      };
+    })();
+
     // Close dropdown menus on outside click / Escape; remove toasts once faded.
     document.addEventListener("click", (e) => {
       for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(e.target)) m.open = false;
@@ -59,7 +81,7 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") for (const m of document.querySelectorAll("details.menu[open]")) m.open = false;
     });
-    for (const t of document.querySelectorAll(".toast")) setTimeout(() => t.remove(), t.classList.contains("error") ? 8000 : 4500);
+    for (const toast of document.querySelectorAll(".toast")) setTimeout(() => toast.remove(), toast.classList.contains("error") ? 8000 : 4500);
   </script>
   {% block scripts %}{% endblock %}
 </body>

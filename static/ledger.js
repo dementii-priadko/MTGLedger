@@ -29,7 +29,7 @@
   });
 
   const initial = location.hash.slice(1) || store.get();
-  select(tabs.some((t) => t.dataset.tab === initial) ? initial : "lent");
+  select(tabs.some((tab) => tab.dataset.tab === initial) ? initial : "lent");
 
   // Keep the selected tab when toggling "show returned".
   document.querySelector(".toggle")?.addEventListener("click", (e) => {
@@ -80,7 +80,7 @@
     const update = () => {
       const total = boxes.filter((b) => b.checked).reduce((n, b) => n + qtyFor(b), 0);
       submit.disabled = total === 0;
-      submit.textContent = total ? `Mark ${total} card${total === 1 ? "" : "s"} returned` : "Mark returned";
+      submit.textContent = total ? tn("Mark {n} card returned", "Mark {n} cards returned", total) : t("Mark returned");
       selectAll.checked = boxes.every((b) => b.checked);
       selectAll.indeterminate = !selectAll.checked && boxes.some((b) => b.checked);
     };
@@ -101,12 +101,13 @@
     update();
   }
   // Loan times in the viewer's own timezone, so two loans from the same day can be told apart.
-  for (const t of document.querySelectorAll("time[data-local]")) {
-    const d = new Date(t.dateTime);
+  for (const el of document.querySelectorAll("time[data-local]")) {
+    const d = new Date(el.dateTime);
     if (isNaN(d)) continue;
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const lang = document.documentElement.lang;
+    const time = d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" });
     const sameDay = d.toDateString() === new Date().toDateString();
-    t.textContent = sameDay ? `today, ${time}` : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+    el.textContent = sameDay ? t("today, {time}", { time }) : `${d.toLocaleDateString(lang, { day: "numeric", month: "short" })}, ${time}`;
   }
 
   document.querySelectorAll("[data-open-dialog]").forEach((btn) =>

@@ -26,7 +26,7 @@
   --radius: 14px;
   --radius-sm: 9px;
   --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Cinzel", Georgia, serif;
+  --font-display: "Cinzel", "Cormorant SC", Georgia, serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -147,6 +147,10 @@ svg { flex: none; }
 .menu-up .menu-panel { top: auto; bottom: calc(100% + 6px); }
 .menu-head { padding: 8px 10px 10px; display: grid; border-bottom: 1px solid var(--border); margin-bottom: 6px; font-size: 14px; }
 .menu-panel form { margin: 0; }
+.menu-langs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 0 0 6px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.menu-lang { text-align: center; padding: 6px 8px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: none !important; }
+.menu-lang:hover { background: var(--surface-2); color: var(--text); }
+.menu-lang.active { background: var(--accent-soft); color: var(--accent); }
 .menu-item { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 14px; }
 .menu-item:hover { background: var(--surface-2); }
 .menu-item.danger { color: var(--danger); }
@@ -283,6 +287,9 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .tile-when { font-size: 12.5px; color: var(--muted); }
 .tile-actions { display: flex; align-items: center; gap: 4px; margin-top: auto; }
 .tile-actions form { margin: 0; }
+/* Long (translated) labels clip instead of pushing the menu button out of the tile. */
+.tile-actions > form, .tile-actions > .return-menu { min-width: 0; }
+.tile-actions > form > .btn, .tile-actions > .return-menu > summary { max-width: 100%; overflow: hidden; }
 .btn-return { color: var(--lent); }
 .btn-return svg { stroke-width: 2.5; }
 .tile.returned .tile-actions > form .btn { color: var(--muted); }
@@ -455,6 +462,10 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--lent); mar
   background: var(--surface); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow-lg);
   display: grid; justify-items: center; gap: 14px;
 }
+.login-langs { order: 10; margin-top: 6px; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--surface-2); }
+.login-langs a { padding: 4px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); text-decoration: none !important; }
+.login-langs a:hover { color: var(--text); }
+.login-langs a.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 .login-card h1 { font-family: var(--font-display); font-size: 26px; letter-spacing: .01em; }
 .login-card > p { max-width: 34ch; }
 .brand-lg { font-size: 15px; color: var(--accent); text-transform: uppercase; letter-spacing: .14em; }

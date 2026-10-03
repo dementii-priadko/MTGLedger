@@ -45,9 +45,9 @@
   // --- who --------------------------------------------------------------------
 
   function syncWho() {
-    $("other-label").textContent = direction() === "lent" ? "Lent to" : "Borrowed from";
+    $("other-label").textContent = direction() === "lent" ? t("Lent to") : t("Borrowed from");
     const who = USERNAME_RE.test(other.value) ? `@${other.value}` : "…";
-    $("cart-who").textContent = (direction() === "lent" ? "Lending to " : "Borrowing from ") + who;
+    $("cart-who").textContent = direction() === "lent" ? t("Lending to {who}", { who }) : t("Borrowing from {who}", { who });
   }
   form.querySelectorAll("[name=direction]").forEach((r) => r.addEventListener("change", syncWho));
 
@@ -142,7 +142,7 @@
     printings = [];
     setSelected(null);
     printingsWrap.hidden = true;
-    setStatus("Loading editions…");
+    setStatus(t("Loading editions…"));
 
     let url = `${API}/cards/search?unique=prints&order=released&dir=desc&q=${encodeURIComponent(`!"${name}" game:paper`)}`;
     try {
@@ -154,19 +154,19 @@
         url = page.has_more ? page.next_page : null;
       }
     } catch {
-      if (name === loadedName) setStatus("Couldn’t reach Scryfall. Check your connection and try again.");
+      if (name === loadedName) setStatus(t("Couldn’t reach Scryfall. Check your connection and try again."));
       loadedName = null;
       return;
     }
     if (name !== loadedName) return; // a newer search started meanwhile
-    if (!printings.length) return setStatus(`No paper printings found for “${name}”.`);
+    if (!printings.length) return setStatus(t("No paper printings found for “{name}”.", { name }));
 
     setStatus(null);
     renderPrintings();
   }
 
   function renderPrintings() {
-    printingCount.textContent = `· ${printings.length} printing${printings.length === 1 ? "" : "s"}`;
+    printingCount.textContent = `· ${tn("{n} printing", "{n} printings", printings.length)}`;
     printingFilter.hidden = printings.length <= 8;
     printingFilter.value = "";
     printingsEl.replaceChildren(
@@ -188,7 +188,7 @@
           el("span", {
             className: "printing-meta",
             textContent: `${p.set.toUpperCase()} #${p.collector_number} · ${p.released_at.slice(0, 4)}` +
-              (p.finishes.includes("nonfoil") ? "" : " · foil only"),
+              (p.finishes.includes("nonfoil") ? "" : ` · ${t("foil only")}`),
           })
         );
         return label;
@@ -266,7 +266,7 @@
       same.qty = clampQty(same.qty + line.qty);
     } else {
       if (cart.length >= MAX_LINES) {
-        showCartError(`A loan can have at most ${MAX_LINES} different cards.`);
+        showCartError(tn("A loan can have at most {n} different card.", "A loan can have at most {n} different cards.", MAX_LINES));
         return false;
       }
       cart.push(line);
@@ -284,9 +284,9 @@
     cartError.hidden = true;
     cartList.replaceChildren(
       ...cart.map((line, i) => {
-        const minus = el("button", { type: "button", className: "cart-btn", textContent: "−", ariaLabel: `One less ${line.name}` });
-        const plus = el("button", { type: "button", className: "cart-btn", textContent: "+", ariaLabel: `One more ${line.name}` });
-        const remove = el("button", { type: "button", className: "cart-btn cart-remove", ariaLabel: `Remove ${line.name}`, title: "Remove" });
+        const minus = el("button", { type: "button", className: "cart-btn", textContent: "−", ariaLabel: t("One less {name}", { name: line.name }) });
+        const plus = el("button", { type: "button", className: "cart-btn", textContent: "+", ariaLabel: t("One more {name}", { name: line.name }) });
+        const remove = el("button", { type: "button", className: "cart-btn cart-remove", ariaLabel: t("Remove {name}", { name: line.name }), title: t("Remove") });
         remove.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>';
         minus.disabled = line.qty <= 1;
         minus.addEventListener("click", () => { line.qty = clampQty(line.qty - 1); renderCart(); });
@@ -295,7 +295,7 @@
 
         const thumb = el("span", { className: `cart-thumb art finish-${line.finish}` });
         if (line.image) thumb.append(el("img", { src: line.image, alt: "" }));
-        const detail = `${line.set} #${line.number}` + (line.finish === "nonfoil" ? "" : ` · ${FINISH_LABEL[line.finish]}`);
+        const detail = `${line.set} #${line.number}` + (line.finish === "nonfoil" ? "" : ` · ${t(FINISH_LABEL[line.finish])}`);
         const li = el(
           "li",
           { className: "cart-item" },
@@ -312,9 +312,9 @@
       })
     );
     const total = cart.reduce((n, c) => n + c.qty, 0);
-    $("cart-count").textContent = `${total} card${total === 1 ? "" : "s"}`;
+    $("cart-count").textContent = tn("{n} card", "{n} cards", total);
     $("cart-empty").hidden = cart.length > 0;
-    $("submit").textContent = total > 1 ? `Record loan · ${total} cards` : "Record loan";
+    $("submit").textContent = total > 1 ? tn("Record loan · {n} card", "Record loan · {n} cards", total) : t("Record loan");
 
     // Hidden fields the server reads (one triple per line), plus display data to restore the list after an error.
     $("cart-inputs").replaceChildren(
@@ -335,7 +335,7 @@
         .filter((c) => c && typeof c.id === "string" && FINISH_LABEL[c.finish])
         .slice(0, MAX_LINES)
         .map((c) => ({
-          id: c.id, name: String(c.name || "Unknown card"), set: String(c.set || ""), number: String(c.number || ""),
+          id: c.id, name: String(c.name || t("Unknown card")), set: String(c.set || ""), number: String(c.number || ""),
           image: typeof c.image === "string" && c.image.startsWith("https://") ? c.image : null,
           finish: c.finish, qty: clampQty(parseInt(c.qty, 10)),
         }));
@@ -372,11 +372,11 @@
     if (selected) addSelected();
     let firstBad = null;
     if (!USERNAME_RE.test(other.value)) {
-      showError(other, "Enter their Telegram username (letters, numbers, underscores).");
+      showError(other, t("Enter their Telegram username (letters, numbers, underscores)."));
       firstBad ||= other;
     }
     if (!cart.length) {
-      showCartError("Add at least one card to the loan.");
+      showCartError(t("Add at least one card to the loan."));
       firstBad ||= nameInput;
     }
     if (firstBad) {
@@ -385,7 +385,7 @@
       return;
     }
     $("submit").disabled = true;
-    $("submit").textContent = "Saving…";
+    $("submit").textContent = t("Saving…");
   });
 
   // Re-enable the button if the page is restored from the back/forward cache.

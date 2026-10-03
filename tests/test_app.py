@@ -175,7 +175,8 @@ def test_login_page_has_redirect_fallback(make_client):
     url = urlparse(href)
     assert url.netloc == "oauth.telegram.org" and url.path == "/auth"
     assert parse_qs(url.query) == {"bot_id": ["123"], "origin": ["https://ledger.example"],
-                                   "request_access": ["write"], "return_to": ["https://ledger.example/login"]}
+                                   "request_access": ["write"], "return_to": ["https://ledger.example/login"],
+                                   "lang": ["en"]}
 
 
 # --- home page summary & grouping -------------------------------------------

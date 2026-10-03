@@ -59,3 +59,12 @@ server and `docker compose -p ledger up -d --build` is run there. The server's `
 Required repository secrets:
 - `DEPLOY_SSH_KEY`: private SSH key authorized for root on the server
 - `DEPLOY_KNOWN_HOSTS`: the server's host key line(s), so the runner can verify it
+
+## Languages
+
+English and Ukrainian. The language follows the browser's `Accept-Language` until the user picks one
+(login page or account menu), which is stored in a `lang` cookie.
+
+Strings live in `i18n.py`: English source text is the key, `UK` holds plain translations and
+`UK_PLURAL` the three Ukrainian plural forms. Use `_("…")` / `_n("…", "…", n)` in Python and templates,
+`t("…")` / `tn("…", "…", n)` in browser scripts. `tests/test_i18n.py` fails if a string has no translation.

@@ -3,6 +3,12 @@
 {% block main_class %}login-main{% endblock %}
 {% block content %}
 <div class="login-card">
+  <nav class="login-langs" aria-label="{{ _("Language") }}">
+    {% for code, label in languages.items() %}
+      <a href="{{ url_for('set_language', code=code) }}" lang="{{ code }}" class="{{ 'active' if code == g.lang }}"
+         {% if code == g.lang %}aria-current="true"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
   <div class="fan" aria-hidden="true">
     <span class="fan-card c1"></span><span class="fan-card c2"></span><span class="fan-card c3"></span>
   </div>
@@ -10,8 +16,8 @@
     <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="17" height="24" rx="3" transform="rotate(12 17 15)"/><rect x="5" y="5" width="17" height="24" rx="3"/></svg>
     <span>Card Ledger</span>
   </div>
-  <h1>Know where every card is.</h1>
-  <p class="muted">Keep track of the Magic cards you lend to friends and the ones you borrow, down to the exact edition and foil.</p>
+  <h1>{{ _("Know where every card is.") }}</h1>
+  <p class="muted">{{ _("Keep track of the Magic cards you lend to friends and the ones you borrow, down to the exact edition and foil.") }}</p>
 
   {% if bot_username %}
     <div class="tg-widget">
@@ -20,10 +26,11 @@
               data-size="large"
               data-radius="10"
               data-auth-url="{{ url_for('auth_telegram', _external=True) }}"
-              data-request-access="write"></script>
+              data-request-access="write"
+              data-lang="{{ g.lang }}"></script>
     </div>
     {% if redirect_login_url %}
-      <p class="alt-login"><a href="{{ redirect_login_url }}">Button not working? Log in via telegram.org</a></p>
+      <p class="alt-login"><a href="{{ redirect_login_url }}">{{ _("Button not working? Log in via telegram.org") }}</a></p>
     {% endif %}
   {% else %}
     <p class="notice error">TELEGRAM_BOT_USERNAME is not configured.</p>
@@ -31,10 +38,10 @@
 
   {% if dev_login %}
     <form method="post" action="{{ url_for('auth_dev') }}" class="dev-login">
-      <span class="field-label">Dev login</span>
+      <span class="field-label">{{ _("Dev login") }}</span>
       <div class="dev-login-row">
-        <span class="input-prefix"><span aria-hidden="true">@</span><input name="username" placeholder="username" required aria-label="Username"></span>
-        <button class="btn">Log in</button>
+        <span class="input-prefix"><span aria-hidden="true">@</span><input name="username" placeholder="username" required aria-label="{{ _("Username") }}"></span>
+        <button class="btn">{{ _("Log in") }}</button>
       </div>
     </form>
   {% endif %}

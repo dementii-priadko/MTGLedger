@@ -19,6 +19,7 @@ try:
 except ImportError:
     SSL_CONTEXT = ssl.create_default_context()
 
+import i18n
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
@@ -142,6 +143,44 @@ def login_required(view):
     return wrapped
 
 
+# --- localization ------------------------------------------------------------
+
+def _(text, **kwargs):
+    return i18n.gettext(g.get("lang", i18n.DEFAULT), text, **kwargs)
+
+
+def _n(singular, plural, n, **kwargs):
+    return i18n.ngettext(g.get("lang", i18n.DEFAULT), singular, plural, n, **kwargs)
+
+
+app.jinja_env.globals.update(_=_, _n=_n, languages=i18n.LANGUAGES)
+
+
+@app.before_request
+def select_language():
+    # An explicit choice (cookie) wins; otherwise follow the browser.
+    lang = request.cookies.get("lang")
+    if lang not in i18n.LANGUAGES:
+        lang = request.accept_languages.best_match(list(i18n.LANGUAGES)) or i18n.DEFAULT
+    g.lang = lang
+
+
+@app.context_processor
+def inject_i18n():
+    return {"js_i18n": i18n.js_catalog(g.lang)}
+
+
+@app.route("/lang/<code>")
+def set_language(code):
+    if code not in i18n.LANGUAGES:
+        abort(404)
+    back = request.referrer if request.referrer and request.referrer.startswith(request.host_url) else None
+    resp = redirect(back or url_for("index"))
+    resp.set_cookie("lang", code, max_age=365 * 24 * 3600, samesite="Lax", httponly=True,
+                    secure=app.config["SESSION_COOKIE_SECURE"])
+    return resp
+
+
 @app.before_request
 def load_user():
     g.user = None
@@ -166,6 +205,7 @@ def login():
             "origin": origin,
             "request_access": "write",
             "return_to": origin + url_for("login"),
+            "lang": g.lang,
         })
     return render_template("login.html", bot_username=BOT_USERNAME, dev_login=DEV_LOGIN,
                            redirect_login_url=redirect_login_url)
@@ -174,7 +214,7 @@ def login():
 @app.route("/auth/telegram")
 def auth_telegram():
     if not verify_telegram_auth(request.args):
-        flash("Telegram login could not be verified.", "error")
+        flash(_("Telegram login could not be verified."), "error")
         return redirect(url_for("login"))
     session.clear()
     session["user_id"] = upsert_telegram_user(request.args)
@@ -189,7 +229,7 @@ def auth_dev():
         abort(404)
     username = request.form.get("username", "").strip().lstrip("@")
     if not USERNAME_RE.match(username):
-        flash("Enter a valid username.", "error")
+        flash(_("Enter a valid username."), "error")
         return redirect(url_for("login"))
     # Deterministic fake Telegram id so the same name logs into the same account.
     fake_id = -int(hashlib.sha256(username.lower().encode()).hexdigest()[:12], 16)
@@ -259,14 +299,14 @@ def get_or_create_mtg_cards(items):
         try:
             fetched = scryfall_cards([sid for sid, _ in missing])
         except ScryfallUnavailable:
-            raise ValueError("Couldn't reach Scryfall, try again in a moment.")
+            raise ValueError(_("Couldn't reach Scryfall, try again in a moment."))
         for sid, finish in missing:
             card = fetched.get(sid)
             if not card or card.get("object") != "card":
-                raise ValueError("A card wasn't found on Scryfall. Remove it and pick it again.")
+                raise ValueError(_("A card wasn't found on Scryfall. Remove it and pick it again."))
             if finish not in card.get("finishes", []):
-                raise ValueError(f"{card['name']} ({card.get('set', '').upper()}) doesn't come in "
-                                 f"{FINISHES[finish].lower()}.")
+                raise ValueError(_("{card} ({set}) doesn't come in {finish}.", card=card["name"],
+                                   set=card.get("set", "").upper(), finish=_(FINISHES[finish]).lower()))
             ids[sid, finish] = db.execute(
                 """INSERT INTO cards (game, external_id, name, set_code, set_name, collector_number, image_url, finish)
                    VALUES ('mtg', %s, %s, %s, %s, %s, %s, %s)
@@ -282,26 +322,27 @@ def parse_cart(form):
     """Read the card lines of a new-loan form; returns ([(scryfall_id, finish, qty), ...], error)."""
     ids, finishes, quantities = form.getlist("scryfall_id"), form.getlist("finish"), form.getlist("quantity")
     if not (len(ids) == len(finishes) == len(quantities)):
-        return [], "The card list was malformed, please try again."
+        return [], _("The card list was malformed, please try again.")
     lines = {}
     for sid, finish, qty in zip(ids, finishes, quantities):
         sid = sid.strip()
         if not sid:
             continue
         if finish not in FINISHES:
-            return [], "Invalid finish."
+            return [], _("Invalid finish.")
         try:
             qty = int(qty)
         except ValueError:
             qty = 0
         if not 1 <= qty <= 99:
-            return [], "Quantity must be between 1 and 99."
+            return [], _("Quantity must be between 1 and 99.")
         # The same printing+finish added twice becomes one line.
         lines[sid, finish] = min(99, lines.get((sid, finish), 0) + qty)
     if not lines:
-        return [], "Add at least one card."
+        return [], _("Add at least one card.")
     if len(lines) > MAX_CARDS_PER_LOAN:
-        return [], f"A loan can have at most {MAX_CARDS_PER_LOAN} different cards."
+        return [], _n("A loan can have at most {n} different card.", "A loan can have at most {n} different cards.",
+                      MAX_CARDS_PER_LOAN)
     return [(sid, finish, qty) for (sid, finish), qty in lines.items()], None
 
 
@@ -340,11 +381,14 @@ def avatar_hue(name):
 def ago(ts):
     days = (datetime.now(timezone.utc).date() - ts.astimezone(timezone.utc).date()).days
     if days <= 0:
-        return "today"
+        return _("today")
     if days == 1:
-        return "yesterday"
+        return _("yesterday")
     if days < 30:
-        return f"{days} days ago"
+        return _n("{n} day ago", "{n} days ago", days)
+    months = i18n.MONTHS_SHORT.get(g.lang)
+    if months:
+        return f"{ts.day} {months[ts.month - 1]} {ts.year}"
     return ts.strftime("%-d %b %Y")
 
 
@@ -418,11 +462,11 @@ def new_loan():
         lines, error = parse_cart(form)
 
         if direction not in ("lent", "borrowed"):
-            error = "Choose whether you lent or borrowed the cards."
+            error = _("Choose whether you lent or borrowed the cards.")
         elif not USERNAME_RE.match(other):
-            error = "Enter the other person's Telegram @username."
+            error = _("Enter the other person's Telegram @username.")
         elif g.user["username"] and other.lower() == g.user["username"].lower():
-            error = "You can't lend cards to yourself."
+            error = _("You can't lend cards to yourself.")
 
         if error is None:
             try:
@@ -444,7 +488,7 @@ def new_loan():
                 )
             db.commit()
             total = sum(qty for _, _, qty in lines)
-            flash(f"Loan recorded: {total} card{'s' if total != 1 else ''}.", "ok")
+            flash(_n("Loan recorded: {n} card.", "Loan recorded: {n} cards.", total), "ok")
             return redirect(url_for("index", _anchor=direction))
         db.rollback()
         flash(error, "error")
@@ -518,7 +562,7 @@ def parse_quantity(value):
 
 def flash_returned(total):
     if total:
-        flash(f"Marked {total} card{'s' if total != 1 else ''} as returned.", "ok")
+        flash(_n("Marked {n} card as returned.", "Marked {n} cards as returned.", total), "ok")
 
 
 @app.route("/loans/<int:loan_id>/return", methods=["POST"])
@@ -540,7 +584,7 @@ def mark_several_returned():
             abort(400)
         requested[loan_id] = parse_quantity(request.form.get(f"qty_{loan_id}"))
     if not requested:
-        flash("Select the cards that came back.", "error")
+        flash(_("Select the cards that came back."), "error")
     else:
         flash_returned(return_loans(requested))
     return redirect(request.referrer or url_for("index"))
