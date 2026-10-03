@@ -1,0 +1,147 @@
+{# Shared by the home page and the person page; import "with context". #}
+
+{% macro avatar(username, first_name, photo_url, cls="avatar") %}
+  {% set name = person(username, first_name) %}
+  {% if photo_url %}<img class="{{ cls }}" src="{{ photo_url }}" alt="">
+  {% else %}<span class="{{ cls }}" style="--hue: {{ avatar_hue(name) }}" aria-hidden="true">{{ name.lstrip('@')[:1]|upper }}</span>{% endif %}
+{% endmacro %}
+
+{% macro tile(l, other, direction) %}
+  <article class="tile {{ l.status }}" data-search="{{ (l.card_name ~ ' ' ~ l.set_name ~ ' ' ~ l.set_code ~ ' ' ~ other)|lower }}">
+    <div class="art finish-{{ l.finish }}">
+      {% if l.image_url %}<img src="{{ l.image_url }}" alt="{{ l.card_name }}" loading="lazy">
+      {% else %}<div class="art-fallback">{{ l.card_name }}</div>{% endif %}
+      {% if l.quantity > 1 %}<span class="qty">×{{ l.quantity }}</span>{% endif %}
+      {% if l.finish != 'nonfoil' %}<span class="finish-tag">{{ _(finishes[l.finish]) }}</span>{% endif %}
+      {% if l.status == 'returned' %}<span class="returned-tag">{{ _("Returned {when}", when=l.returned_at|ago) }}</span>{% endif %}
+    </div>
+    <div class="tile-body">
+      <h3 class="tile-name" title="{{ l.card_name }}">{{ l.card_name }}</h3>
+      <p class="tile-set" title="{{ l.set_name }}">
+        <img class="set-icon" src="https://svgs.scryfall.io/sets/{{ l.set_code }}.svg" alt="" onerror="this.remove()">
+        <span>{{ l.set_code|upper }} · #{{ l.collector_number }}</span>
+      </p>
+      <p class="tile-when">{{ l.created_at|ago|capitalize }}</p>
+    </div>
+    <div class="tile-actions">
+      {% set return_label = _("Got it back") if direction == "lent" else _("Gave it back") %}
+      {% if l.status == 'borrowed' and l.quantity == 1 %}
+        <form method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}">
+          <button class="btn btn-sm btn-ghost btn-return" title="{{ _("Mark as returned") }}">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ return_label }}
+          </button>
+        </form>
+      {% elif l.status == 'borrowed' %}
+        {# Several copies: ask how many came back. #}
+        <details class="menu menu-up return-menu">
+          <summary class="btn btn-sm btn-ghost btn-return" title="{{ _("Mark as returned") }}">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ return_label }}
+          </summary>
+          <form class="menu-panel return-panel" method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}">
+            <span class="field-label" id="ret-{{ l.id }}">{{ _("How many came back?") }}</span>
+            <div class="return-row">
+              <div class="stepper stepper-sm" aria-labelledby="ret-{{ l.id }}">
+                <button type="button" data-step="-1" aria-label="{{ _("Fewer") }}">−</button>
+                <input type="number" name="quantity" value="{{ l.quantity }}" min="1" max="{{ l.quantity }}" inputmode="numeric" aria-labelledby="ret-{{ l.id }}">
+                <button type="button" data-step="1" aria-label="{{ _("More") }}">+</button>
+              </div>
+              <span class="muted">{{ _("of {n}", n=l.quantity) }}</span>
+            </div>
+            <button class="btn btn-sm btn-primary btn-block">{{ _("Mark returned") }}</button>
+          </form>
+        </details>
+      {% else %}
+        <form method="post" action="{{ url_for('reopen', loan_id=l.id) }}">
+          <button class="btn btn-sm btn-ghost">{{ _("Undo return") }}</button>
+        </form>
+      {% endif %}
+      {% if l.created_by == g.user.id %}
+        <details class="menu menu-up">
+          <summary class="btn btn-sm btn-icon" aria-label="{{ _("More actions") }}">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15.5" cy="10" r="1.4"/></svg>
+          </summary>
+          <div class="menu-panel">
+            <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
+                  onsubmit="return confirm({{ _("Delete this entry? This can’t be undone.")|tojson|forceescape }})">
+              <button class="menu-item danger">{{ _("Delete entry") }}</button>
+            </form>
+          </div>
+        </details>
+      {% endif %}
+    </div>
+  </article>
+{% endmacro %}
+
+{% macro return_dialog(dialog_id, grp, name, direction) %}
+  <dialog class="return-dialog" id="{{ dialog_id }}" aria-labelledby="{{ dialog_id }}-title">
+    <form method="post" action="{{ url_for('mark_several_returned') }}">
+      <header class="dialog-head">
+        <h2 id="{{ dialog_id }}-title">{{ _("What did {name} give back?", name=name) if direction == "lent" else _("What did you give back to {name}?", name=name) }}</h2>
+        <button type="button" class="btn btn-sm btn-icon" data-close-dialog aria-label="{{ _("Close") }}">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+        </button>
+      </header>
+      <div class="dialog-body">
+        <label class="select-all"><input type="checkbox" data-select-all> {{ _("Select everything") }}</label>
+        {% for batch in grp.open_batches %}
+          <section class="return-batch">
+            {% set when %}<time datetime="{{ batch.created_at.isoformat() }}" data-local>{{ batch.created_at|ago }}</time>{% endset %}
+            {# Translate around the <time> element so its markup survives escaping. #}
+            <h3>{% if direction == "lent" %}{{ _("Lent {when}", when="%%WHEN%%")|replace("%%WHEN%%", when) }}{% else %}{{ _("Borrowed {when}", when="%%WHEN%%")|replace("%%WHEN%%", when) }}{% endif %}
+              <span class="muted">· {{ _n("{n} card", "{n} cards", batch.loans|sum(attribute='quantity')) }}</span></h3>
+            {% for l in batch.loans %}
+              <div class="return-line">
+                <label class="return-pick">
+                  <input type="checkbox" name="loan_id" value="{{ l.id }}" data-qty="{{ l.quantity }}">
+                  <span class="cart-thumb art finish-{{ l.finish }}">{% if l.image_url %}<img src="{{ l.image_url }}" alt="" loading="lazy">{% endif %}</span>
+                  <span class="cart-info">
+                    <strong>{{ l.card_name }}</strong>
+                    <span class="muted">{{ l.set_code|upper }} #{{ l.collector_number }}{% if l.finish != 'nonfoil' %} · {{ _(finishes[l.finish]) }}{% endif %}</span>
+                  </span>
+                </label>
+                {% if l.quantity > 1 %}
+                  <div class="stepper stepper-sm" aria-label="{{ _("How many {name} came back", name=l.card_name) }}">
+                    <button type="button" data-step="-1" aria-label="{{ _("Fewer") }}">−</button>
+                    <input type="number" name="qty_{{ l.id }}" value="{{ l.quantity }}" min="1" max="{{ l.quantity }}" inputmode="numeric" aria-label="{{ _("Quantity returned") }}">
+                    <button type="button" data-step="1" aria-label="{{ _("More") }}">+</button>
+                  </div>
+                  <span class="muted of">{{ _("of {n}", n=l.quantity) }}</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </section>
+        {% endfor %}
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close-dialog>{{ _("Cancel") }}</button>
+        <button class="btn btn-primary" data-submit-count disabled>{{ _("Mark returned") }}</button>
+      </footer>
+    </form>
+  </dialog>
+{% endmacro %}
+
+{# Buttons for one person + direction: return several, clear returned records, add another card. #}
+{% macro group_actions(grp, name, direction, dialog_id, show_add=true) %}
+          {% if grp.open_rows > 1 %}
+            <button type="button" class="btn btn-sm btn-ghost" data-open-dialog="{{ dialog_id }}"
+                    title="{{ _("Return several") }}" aria-label="{{ _("Return several") }}">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg><span class="hide-sm">{{ _("Return several") }}</span>
+            </button>
+          {% endif %}
+          {% if grp.returned_rows %}
+            {% set clear_label = _n("Delete {n} returned record", "Delete {n} returned records", grp.returned_rows) %}
+            <form method="post" action="{{ url_for('clear_returned', person_id=grp.id) }}"
+                  onsubmit="return confirm({{ _("{action} with {name}? They disappear from your ledger only — {name} keeps their own copy.", action=clear_label, name=name)|tojson|forceescape }})">
+              <input type="hidden" name="direction" value="{{ direction }}">
+              <button class="btn btn-sm btn-icon btn-clear" title="{{ clear_label }}" aria-label="{{ clear_label }}">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10M9 9v4M11 9v4"/></svg>
+              </button>
+            </form>
+          {% endif %}
+          {% if show_add and grp.username %}
+            <a class="btn btn-sm btn-icon" href="{{ url_for('new_loan', direction=direction, other=grp.username) }}"
+               title="{{ _("Add another card with {name}", name=name) }}" aria-label="{{ _("Add another card with {name}", name=name) }}">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+            </a>
+          {% endif %}
+{% endmacro %}

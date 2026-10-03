@@ -228,7 +228,29 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .panel::after { content: ""; flex: 999 1 0; }
 .person-group { flex: 1 1 auto; min-width: min(100%, 360px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); }
 .person-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.person-info { display: grid; line-height: 1.3; min-width: 0; margin-right: auto; }
+.person-info { display: grid; line-height: 1.3; min-width: 0; }
+.person-link { display: flex; align-items: center; gap: 12px; min-width: 0; margin-right: auto; color: inherit; text-decoration: none !important; border-radius: 10px; }
+.person-link:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+
+/* person page */
+.avatar-lg { width: 64px; height: 64px; font-size: 26px; }
+.person-hero { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 8px 0 20px; }
+.person-hero-info { display: grid; gap: 2px; margin-right: auto; min-width: 0; }
+.person-hero-info h1 { font-family: var(--font-display); font-size: 28px; overflow-wrap: anywhere; }
+.person-hero-info a { font-size: 14px; }
+.person-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.person-hero-actions .btn svg { stroke-width: 2.2; }
+.summary-static .stat { text-decoration: none !important; color: inherit; }
+.summary-static .stat::after { transform: none; opacity: .6; }
+.toolbar-end { justify-content: flex-end; }
+.person-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow-sm); scroll-margin-top: 80px; }
+.person-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.person-section-head h2 { display: inline-flex; align-items: center; gap: 10px; font-size: 17px; margin-right: auto; overflow-wrap: anywhere; }
+.person-section-head h2 svg { width: 26px; height: 26px; padding: 5px; border-radius: 8px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.person-section-lent h2 svg { background: var(--lent-soft); stroke: var(--lent); }
+.person-section-borrowed h2 svg { background: var(--borrowed-soft); stroke: var(--borrowed); }
+.person-section-actions { display: inline-flex; align-items: center; gap: 4px; }
+.person-section-empty { padding: 8px 2px 4px; }
 .person-info strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person-info .muted { font-size: 13px; }
 .pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 99px; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--muted); white-space: nowrap; }

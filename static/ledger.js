@@ -28,8 +28,10 @@
     });
   });
 
-  const initial = location.hash.slice(1) || store.get();
-  select(tabs.some((tab) => tab.dataset.tab === initial) ? initial : "lent");
+  if (tabs.length) {
+    const initial = location.hash.slice(1) || store.get();
+    select(tabs.some((tab) => tab.dataset.tab === initial) ? initial : "lent");
+  }
 
   // Keep the selected tab when toggling "show returned".
   document.querySelector(".toggle")?.addEventListener("click", (e) => {

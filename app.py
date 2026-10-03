@@ -470,6 +470,63 @@ def index():
     )
 
 
+@app.route("/people/<int:person_id>")
+@login_required
+def person_page(person_id):
+    """Everything between the current user and one person: what you lent them and what you borrowed."""
+    me = g.user["id"]
+    if person_id == me:
+        return redirect(url_for("index"))
+    db = get_db()
+    params = {"me": me, "p": person_id}
+    # Only people you have (or had) loans with; no browsing of other users.
+    if not db.execute(
+        """SELECT 1 FROM loans WHERE (lender_id = %(me)s AND borrower_id = %(p)s)
+                                  OR (lender_id = %(p)s AND borrower_id = %(me)s) LIMIT 1""",
+        params,
+    ).fetchone():
+        abort(404)
+    other = db.execute("SELECT * FROM users WHERE id = %s", (person_id,)).fetchone()
+
+    show_all = request.args.get("show") == "all"
+    status_clause = "" if show_all else "AND l.status = 'borrowed'"
+    lent = db.execute(
+        f"""{LOAN_SELECT} WHERE l.lender_id = %(me)s AND l.borrower_id = %(p)s AND NOT l.hidden_by_lender
+            {status_clause} ORDER BY l.status, l.created_at DESC""",
+        params,
+    ).fetchall()
+    borrowed = db.execute(
+        f"""{LOAN_SELECT} WHERE l.borrower_id = %(me)s AND l.lender_id = %(p)s AND NOT l.hidden_by_borrower
+            {status_clause} ORDER BY l.status, l.created_at DESC""",
+        params,
+    ).fetchall()
+    returned = db.execute(
+        """SELECT count(*) FILTER (WHERE lender_id = %(me)s AND NOT hidden_by_lender) AS lent,
+                  count(*) FILTER (WHERE borrower_id = %(me)s AND NOT hidden_by_borrower) AS borrowed
+           FROM loans
+           WHERE status = 'returned' AND ((lender_id = %(me)s AND borrower_id = %(p)s)
+                                       OR (lender_id = %(p)s AND borrower_id = %(me)s))""",
+        params,
+    ).fetchone()
+
+    def side(loans, role, returned_rows):
+        groups = group_by_person(loans, role, {person_id: returned_rows})
+        if groups:
+            return groups[0]
+        return {"id": person_id, "username": other["username"], "first_name": other["first_name"],
+                "photo_url": other["photo_url"], "loans": [], "out": 0, "open_batches": [], "open_rows": 0,
+                "returned_rows": returned_rows}
+
+    return render_template(
+        "person.html",
+        other=other,
+        lent=side(lent, "borrower", returned["lent"]),
+        borrowed=side(borrowed, "lender", returned["borrowed"]),
+        show_all=show_all,
+        finishes=FINISHES,
+    )
+
+
 @app.route("/loans/new", methods=["GET", "POST"])
 @login_required
 def new_loan():

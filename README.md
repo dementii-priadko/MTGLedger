@@ -79,6 +79,12 @@ in the server's `.env`; without either the service stays idle. Failed sends are 
 Send one right away: `docker compose -p ledger exec backup python backup.py --now`.
 Print the CSV instead: `python backup.py --stdout`.
 
+## Person page
+
+Clicking a person on the home page opens `/people/<id>`: everything you lent them and borrowed from them
+on one screen, with the same return/clear actions and shortcuts to record new loans with them. Only
+available for people you have loans with.
+
 ## Clearing returned records
 
 Each person can delete returned records with someone from their own ledger (trash icon next to the

@@ -413,3 +413,60 @@ def test_undo_by_other_side_brings_cleared_record_back(make_client, query):
     make_client("bob").post("/loans/1/reopen")               # bob says: actually I still have it
     assert query("SELECT status, hidden_by_lender FROM loans") == [("borrowed", False)]
     assert "Lightning Bolt" in alice.get("/").get_data(as_text=True)
+
+
+# --- person page ------------------------------------------------------------
+
+def user_id(query, username):
+    return query("SELECT id FROM users WHERE username = %s", (username,))[0][0]
+
+
+def test_person_page_shows_both_directions(make_client, query):
+    alice = make_client("alice")
+    lend_many(alice, [("bolt-m10", "foil", 2)], other="@bob")
+    lend_many(alice, [("sol-ring-cmm", "etched", 1)], other="@bob", direction="borrowed")
+    lend(alice, other="@carol", card="sol-ring-cmm")                     # someone else: not on bob's page
+    page = alice.get(f"/people/{user_id(query, 'bob')}").get_data(as_text=True)
+    assert "You lent to @bob" in page and "You borrowed from @bob" in page
+    assert page.count('class="tile ') == 2
+    assert "Lightning Bolt" in page and "Sol Ring" in page
+    assert 'href="https://t.me/bob"' in page
+    assert "/loans/new?direction=lent&amp;other=bob" in page and "/loans/new?direction=borrowed&amp;other=bob" in page
+
+
+def test_person_page_returned_toggle_and_clear(make_client, query):
+    alice = make_client("alice")
+    lend(alice, quantity="3")
+    alice.post("/loans/1/return", data={"quantity": "1"})
+    pid = user_id(query, "bob")
+    assert alice.get(f"/people/{pid}").get_data(as_text=True).count('class="tile ') == 1
+    page = alice.get(f"/people/{pid}?show=all").get_data(as_text=True)
+    assert page.count('class="tile ') == 2 and "Delete 1 returned record" in page
+    alice.post(f"/people/{pid}/clear-returned", data={"direction": "lent"})
+    assert alice.get(f"/people/{pid}?show=all").get_data(as_text=True).count('class="tile ') == 1
+
+
+def test_person_page_only_for_people_you_dealt_with(make_client, query):
+    lend(make_client("alice"))                                   # alice <-> bob
+    make_client("carol")
+    carol = make_client("carol")
+    assert carol.get(f"/people/{user_id(query, 'bob')}").status_code == 404
+    assert carol.get("/people/99999").status_code == 404
+    alice = make_client("alice")
+    assert alice.get(f"/people/{user_id(query, 'alice')}").headers["Location"] == "/"
+
+
+def test_person_page_survives_clearing_everything(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    alice.post("/loans/1/return")
+    pid = user_id(query, "bob")
+    alice.post(f"/people/{pid}/clear-returned", data={"direction": "lent"})
+    page = alice.get(f"/people/{pid}")
+    assert page.status_code == 200 and b"Nothing lent to @bob right now." in page.data
+
+
+def test_home_links_to_person_page(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    assert f'href="/people/{user_id(query, "bob")}"' in alice.get("/").get_data(as_text=True)

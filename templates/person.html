@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% set name = person(other.username, other.first_name) %}
+{% block title %}{{ name }} · Card Ledger{% endblock %}
+
+{% macro section(grp, direction, title, empty_text) %}
+  <section class="person-section person-section-{{ direction }}" aria-labelledby="sec-{{ direction }}">
+    <header class="person-section-head">
+      <h2 id="sec-{{ direction }}">
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          {% if direction == 'lent' %}<path d="M5 15L15 5M8 5h7v7"/>{% else %}<path d="M15 5L5 15M12 15H5V8"/>{% endif %}
+        </svg>{{ title }}
+      </h2>
+      {% if grp.out %}<span class="pill pill-{{ direction }}">{{ _n("{n} card out", "{n} cards out", grp.out) }}</span>{% endif %}
+      <span class="person-section-actions">{{ m.group_actions(grp, name, direction, 'return-' ~ direction) }}</span>
+    </header>
+    {% if grp.loans %}
+      <div class="card-grid">
+        {% for l in grp.loans %}{{ m.tile(l, name, direction) }}{% endfor %}
+      </div>
+    {% else %}
+      <p class="muted person-section-empty">{{ empty_text }}</p>
+    {% endif %}
+    {% if grp.open_rows > 1 %}{{ m.return_dialog('return-' ~ direction, grp, name, direction) }}{% endif %}
+  </section>
+{% endmacro %}
+
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">
+  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4l-6 6 6 6"/></svg>{{ _("Ledger") }}
+</a>
+
+<header class="person-hero">
+  {{ m.avatar(other.username, other.first_name, other.photo_url, cls="avatar avatar-lg") }}
+  <div class="person-hero-info">
+    <h1>{{ other.first_name or other.username or name }}</h1>
+    {% if other.username %}
+      <a class="muted" href="https://t.me/{{ other.username }}" target="_blank" rel="noopener"
+         title="{{ _("Open in Telegram") }}">@{{ other.username }} ↗</a>
+    {% endif %}
+  </div>
+  {% if other.username %}
+    <div class="person-hero-actions">
+      <a class="btn" href="{{ url_for('new_loan', direction='lent', other=other.username) }}">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>{{ _("Lend cards") }}
+      </a>
+      <a class="btn" href="{{ url_for('new_loan', direction='borrowed', other=other.username) }}">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>{{ _("Borrow cards") }}
+      </a>
+    </div>
+  {% endif %}
+</header>
+
+<div class="summary summary-static">
+  <a class="stat stat-lent" href="#sec-lent">
+    <span class="stat-label"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>{{ _("Lent out") }}</span>
+    <span class="stat-value">{{ lent.out }}</span>
+    <span class="stat-sub">{{ _n("card", "cards", lent.out) }}</span>
+  </a>
+  <a class="stat stat-borrowed" href="#sec-borrowed">
+    <span class="stat-label"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>{{ _("Borrowed") }}</span>
+    <span class="stat-value">{{ borrowed.out }}</span>
+    <span class="stat-sub">{{ _n("card", "cards", borrowed.out) }}</span>
+  </a>
+</div>
+
+<div class="toolbar toolbar-end">
+  <a class="toggle {{ 'on' if show_all }}" href="{{ url_for('person_page', person_id=other.id, show=None if show_all else 'all') }}"
+     role="switch" aria-checked="{{ 'true' if show_all else 'false' }}">
+    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    {{ _("Show returned") }}
+  </a>
+</div>
+
+{{ section(lent, 'lent', _("You lent to {name}", name=name),
+           _("Nothing lent to {name} right now.", name=name) if not show_all else _("You haven’t lent {name} anything yet.", name=name)) }}
+{{ section(borrowed, 'borrowed', _("You borrowed from {name}", name=name),
+           _("Nothing borrowed from {name} right now.", name=name) if not show_all else _("You haven’t borrowed anything from {name} yet.", name=name)) }}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='ledger.js') }}"></script>
+{% endblock %}

@@ -81,6 +81,18 @@ UK = {
     "Record a loan": "Записати позику",
     "No cards match your search.": "Жодна карта не відповідає пошуку.",
 
+    # person page
+    "Everything with {name}": "Усе з {name}",
+    "Open in Telegram": "Відкрити в Telegram",
+    "Lend cards": "Позичити карти",
+    "Borrow cards": "Взяти карти",
+    "You lent to {name}": "Ви позичили {name}",
+    "You borrowed from {name}": "Ви взяли в {name}",
+    "Nothing lent to {name} right now.": "Зараз у {name} немає ваших карт.",
+    "You haven’t lent {name} anything yet.": "Ви ще нічого не позичали {name}.",
+    "Nothing borrowed from {name} right now.": "Зараз у вас немає карт {name}.",
+    "You haven’t borrowed anything from {name} yet.": "Ви ще нічого не брали в {name}.",
+
     # card tile
     "Returned {when}": "Повернуто {when}",
     "Got it back": "Повернули",
