@@ -4,6 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Card Ledger{% endblock %}</title>
+  {# Link previews (Telegram, etc.). Crawlers aren't logged in, so this describes the site, never a page's data. #}
+  {% set site_title = _("Card Ledger — who has your cards") %}
+  {% set site_description = _("Keep track of the Magic cards you lend to friends and the ones you borrow, down to the exact edition and foil.") %}
+  <meta name="description" content="{{ site_description }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Card Ledger">
+  <meta property="og:title" content="{{ site_title }}">
+  <meta property="og:description" content="{{ site_description }}">
+  <meta property="og:url" content="{{ url_for('index', _external=True) }}">
+  <meta property="og:image" content="{{ url_for('static', filename='og-image.png', _external=True) }}">
+  <meta property="og:image:width" content="600">
+  <meta property="og:image:height" content="600">
+  <meta property="og:image:alt" content="Card Ledger">
+  <meta property="og:locale" content="{{ 'uk_UA' if g.lang == 'uk' else 'en_US' }}">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#0d0f13">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='og-image.png') }}">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='17' height='24' rx='3' fill='%23e3b65a' transform='rotate(12 17 15)'/%3E%3Crect x='5' y='5' width='17' height='24' rx='3' fill='%23161a20' stroke='%23e3b65a' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

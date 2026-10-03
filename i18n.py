@@ -44,6 +44,9 @@ MONTHS_SHORT = {
 
 
 UK = {
+    # link preview
+    "Card Ledger — who has your cards": "Card Ledger — у кого ваші карти",
+
     # layout / account
     "New loan": "Нова позика",
     "Account": "Обліковий запис",

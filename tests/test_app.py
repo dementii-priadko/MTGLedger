@@ -478,3 +478,22 @@ def test_person_page_has_search(make_client, query):
     page = alice.get(f"/people/{user_id(query, 'bob')}").get_data(as_text=True)
     assert 'id="filter"' in page and "Search cards or sets" in page
     assert page.count("data-filter-scope") == 2 and 'class="no-matches' in page
+
+
+# --- link previews ----------------------------------------------------------
+
+def test_link_preview_tags_for_logged_out_crawler(make_client):
+    crawler = make_client()
+    headers = {"User-Agent": "TelegramBot (like TwitterBot)"}
+    assert crawler.get("/", headers=headers).headers["Location"] == "/login"   # what Telegram follows
+    page = crawler.get("/login", headers=headers, base_url="https://ledger.example").get_data(as_text=True)
+    assert '<meta property="og:title" content="Card Ledger — who has your cards">' in page
+    assert 'property="og:description" content="Keep track of the Magic cards' in page
+    assert '<meta property="og:image" content="https://ledger.example/static/og-image.png">' in page
+    assert '<meta name="twitter:card" content="summary">' in page
+    assert crawler.get("/static/og-image.png").status_code == 200
+
+
+def test_link_preview_follows_language(make_client):
+    page = make_client().get("/login", headers={"Accept-Language": "uk"}).get_data(as_text=True)
+    assert 'content="Card Ledger — у кого ваші карти"' in page and 'content="uk_UA"' in page
