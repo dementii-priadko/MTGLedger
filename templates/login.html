@@ -9,6 +9,9 @@
             data-size="large"
             data-auth-url="{{ url_for('auth_telegram', _external=True) }}"
             data-request-access="write"></script>
+    {% if redirect_login_url %}
+      <p class="alt-login"><a href="{{ redirect_login_url }}">Button not working? Log in via telegram.org</a></p>
+    {% endif %}
   {% else %}
     <p class="flash error">TELEGRAM_BOT_USERNAME is not configured.</p>
   {% endif %}

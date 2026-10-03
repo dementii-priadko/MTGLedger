@@ -164,3 +164,13 @@ def test_logout(make_client):
     alice = make_client("alice")
     alice.post("/logout")
     assert alice.get("/").status_code == 302
+
+
+def test_login_page_has_redirect_fallback(make_client):
+    from urllib.parse import parse_qs, urlparse
+    page = make_client().get("/login", base_url="https://ledger.example").get_data(as_text=True)
+    href = page.split('class="alt-login"><a href="')[1].split('"')[0].replace("&amp;", "&")
+    url = urlparse(href)
+    assert url.netloc == "oauth.telegram.org" and url.path == "/auth"
+    assert parse_qs(url.query) == {"bot_id": ["123"], "origin": ["https://ledger.example"],
+                                   "request_access": ["write"], "return_to": ["https://ledger.example/login"]}

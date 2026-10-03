@@ -152,7 +152,20 @@ def load_user():
 def login():
     if g.user is not None:
         return redirect(url_for("index"))
-    return render_template("login.html", bot_username=BOT_USERNAME, dev_login=DEV_LOGIN)
+    # Full-page redirect flow; Telegram returns to /login#tgAuthResult=..., which the widget
+    # script forwards to /auth/telegram. Works where the embedded iframe can't (e.g. Firefox
+    # with third-party cookie isolation).
+    redirect_login_url = None
+    if BOT_TOKEN:
+        origin = request.host_url.rstrip("/")
+        redirect_login_url = "https://oauth.telegram.org/auth?" + urllib.parse.urlencode({
+            "bot_id": BOT_TOKEN.split(":")[0],
+            "origin": origin,
+            "request_access": "write",
+            "return_to": origin + url_for("login"),
+        })
+    return render_template("login.html", bot_username=BOT_USERNAME, dev_login=DEV_LOGIN,
+                           redirect_login_url=redirect_login_url)
 
 
 @app.route("/auth/telegram")

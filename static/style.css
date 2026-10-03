@@ -63,3 +63,4 @@ fieldset.direction label { display: flex; align-items: center; gap: .4rem; }
   tr { border-bottom: 1px solid var(--border); padding: .5rem 0; }
   td { border: none; padding: .15rem .5rem; }
 }
+.alt-login { font-size: .85rem; margin-top: 1rem; }
