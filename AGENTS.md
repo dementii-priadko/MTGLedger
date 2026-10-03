@@ -115,6 +115,19 @@ DEV_LOGIN=1 SECRET_KEY=dev .venv/bin/python app.py   # http://localhost:3000, us
 recipient is configured, so local stacks never send. Cells are formula-escaped and the file has a UTF-8
 BOM for Excel. Manual run on the server: `docker compose -p ledger exec backup python backup.py --now`.
 
+## Security rules (enforced by `tests/test_security.py`)
+
+- **CSP** (`security_headers` in `app.py`): no inline event handlers (`onclick=`, `onsubmit=`…) and no
+  inline `<script>` without `nonce="{{ g.csp_nonce }}"`. Use `<form data-confirm="…">` for confirm
+  prompts. New external hosts (images, APIs, frames) must be added to `CSP` explicitly.
+- **State-changing requests** must be POST; `reject_cross_origin_writes` blocks POSTs whose
+  Origin/Referer isn't this site (SameSite cookies alone don't cover sibling `*.beznadijka.dev` sites).
+- After an action, redirect with `back_or_index()`, never `redirect(request.referrer)` (open redirect).
+- `ProxyFix` trusts only `X-Forwarded-Proto`; don't enable `x_host` (nginx doesn't set it).
+- Templates rely on Jinja autoescaping: never use `|safe` on user/Scryfall data; in JS set text with
+  `textContent`, not `innerHTML`.
+- Containers run as the unprivileged `app` user.
+
 ## Conventions
 
 - Match the existing style: plain SQL with `%s`/`%(name)s` params (never string-format user input into

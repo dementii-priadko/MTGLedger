@@ -26,6 +26,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+SC:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script nonce="{{ g.csp_nonce }}">
+    // Drop set icons Scryfall doesn't have (registered early: image errors can fire before the page ends).
+    document.addEventListener("error", (e) => { if (e.target.matches?.("img.set-icon")) e.target.remove(); }, true);
+  </script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   {% if g.user %}
@@ -74,7 +78,7 @@
   <main class="{% block main_class %}container{% endblock %}">
     {% block content %}{% endblock %}
   </main>
-  <script>
+  <script nonce="{{ g.csp_nonce }}">
     // Translations for page scripts: t(englishText, vars) and tn(singular, plural, n, vars).
     window.I18N = {{ js_i18n|tojson }};
     (() => {
@@ -90,6 +94,12 @@
         return fill(forms ? forms[pluralIndex(n)] : n === 1 ? one : many, { n, ...vars });
       };
     })();
+
+    // <form data-confirm="…"> asks before submitting (inline handlers are blocked by the CSP).
+    document.addEventListener("submit", (e) => {
+      const message = e.target.dataset?.confirm;
+      if (message && !confirm(message)) e.preventDefault();
+    });
 
     // Close dropdown menus on outside click / Escape; remove toasts once faded.
     document.addEventListener("click", (e) => {

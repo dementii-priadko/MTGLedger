@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import ssl
 import time
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ import i18n
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from urllib.parse import urlsplit
+
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 BASE_DIR = Path(__file__).parent
@@ -30,16 +33,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://ledger:ledger@localh
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
 DEV_LOGIN = os.environ.get("DEV_LOGIN") == "1"
-AUTH_MAX_AGE = 24 * 3600  # reject Telegram auth payloads older than this
+AUTH_MAX_AGE = 3600  # reject Telegram auth payloads older than this (they end up in logs/history)
 
 FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 MAX_CARDS_PER_LOAN = 50
 
 app = Flask(__name__)
-# Behind a tunnel / reverse proxy: trust X-Forwarded-Proto/Host so external URLs
-# (the Telegram widget's auth URL) use the public https address.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+# Behind nginx: trust X-Forwarded-Proto so external URLs (Telegram auth URL, og: tags) use https.
+# Not X-Forwarded-Host: nginx doesn't set it, so it would be attacker-controlled.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY") or os.urandom(32),
     SESSION_COOKIE_SAMESITE="Lax",
@@ -143,6 +146,63 @@ def login_required(view):
     return wrapped
 
 
+# --- request hardening -------------------------------------------------------
+
+def same_origin(url):
+    """True if `url` points at this site (scheme + host), e.g. an Origin or Referer header."""
+    ours, theirs = urlsplit(request.host_url), urlsplit(url)
+    return (theirs.scheme, theirs.netloc) == (ours.scheme, ours.netloc)
+
+
+@app.before_request
+def reject_cross_origin_writes():
+    # SameSite=Lax cookies alone don't stop sibling subdomains (same "site"), so check where
+    # state-changing requests come from. Requests without Origin/Referer are allowed.
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    source = request.headers.get("Origin") or request.headers.get("Referer")
+    if source is not None and not same_origin(source):
+        abort(403)
+
+
+def back_or_index():
+    """Redirect to the page the user came from, but only within this site."""
+    ref = request.referrer
+    return redirect(ref if ref and same_origin(ref) else url_for("index"))
+
+
+@app.before_request
+def make_csp_nonce():
+    g.csp_nonce = secrets.token_urlsafe(16)
+
+
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'nonce-{nonce}' https://telegram.org",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src https://fonts.gstatic.com",
+    "img-src 'self' data: https://cards.scryfall.io https://svgs.scryfall.io https://t.me https://*.telesco.pe",
+    "connect-src 'self' https://api.scryfall.com",
+    "frame-src https://oauth.telegram.org",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+])
+
+
+@app.after_request
+def security_headers(resp):
+    resp.headers["Content-Security-Policy"] = CSP.format(nonce=g.get("csp_nonce", ""))
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.is_secure:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return resp
+
+
 # --- localization ------------------------------------------------------------
 
 def _(text, **kwargs):
@@ -174,8 +234,7 @@ def inject_i18n():
 def set_language(code):
     if code not in i18n.LANGUAGES:
         abort(404)
-    back = request.referrer if request.referrer and request.referrer.startswith(request.host_url) else None
-    resp = redirect(back or url_for("index"))
+    resp = back_or_index()
     resp.set_cookie("lang", code, max_age=365 * 24 * 3600, samesite="Lax", httponly=True,
                     secure=app.config["SESSION_COOKIE_SECURE"])
     return resp
@@ -645,7 +704,7 @@ def flash_returned(total):
 @login_required
 def mark_returned(loan_id):
     flash_returned(return_loans({loan_id: parse_quantity(request.form.get("quantity"))}))
-    return redirect(request.referrer or url_for("index"))
+    return back_or_index()
 
 
 @app.route("/returns", methods=["POST"])
@@ -663,7 +722,7 @@ def mark_several_returned():
         flash(_("Select the cards that came back."), "error")
     else:
         flash_returned(return_loans(requested))
-    return redirect(request.referrer or url_for("index"))
+    return back_or_index()
 
 
 @app.route("/loans/<int:loan_id>/reopen", methods=["POST"])
@@ -694,7 +753,7 @@ def reopen(loan_id):
                 (loan_id,),
             )
     db.commit()
-    return redirect(request.referrer or url_for("index"))
+    return back_or_index()
 
 
 @app.route("/people/<int:person_id>/clear-returned", methods=["POST"])
@@ -720,7 +779,7 @@ def clear_returned(person_id):
     db.commit()
     if cleared:
         flash(_n("Deleted {n} returned record.", "Deleted {n} returned records.", cleared), "ok")
-    return redirect(request.referrer or url_for("index"))
+    return back_or_index()
 
 
 @app.route("/loans/<int:loan_id>/delete", methods=["POST"])
@@ -732,7 +791,7 @@ def delete_loan(loan_id):
     db = get_db()
     db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
     db.commit()
-    return redirect(request.referrer or url_for("index"))
+    return back_or_index()
 
 
 init_db()

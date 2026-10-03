@@ -18,7 +18,7 @@
     <div class="tile-body">
       <h3 class="tile-name" title="{{ l.card_name }}">{{ l.card_name }}</h3>
       <p class="tile-set" title="{{ l.set_name }}">
-        <img class="set-icon" src="https://svgs.scryfall.io/sets/{{ l.set_code }}.svg" alt="" onerror="this.remove()">
+        <img class="set-icon" src="https://svgs.scryfall.io/sets/{{ l.set_code }}.svg" alt="">
         <span>{{ l.set_code|upper }} · #{{ l.collector_number }}</span>
       </p>
       <p class="tile-when">{{ l.created_at|ago|capitalize }}</p>
@@ -62,7 +62,7 @@
           </summary>
           <div class="menu-panel">
             <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
-                  onsubmit="return confirm({{ _("Delete this entry? This can’t be undone.")|tojson|forceescape }})">
+                  data-confirm="{{ _("Delete this entry? This can’t be undone.") }}">
               <button class="menu-item danger">{{ _("Delete entry") }}</button>
             </form>
           </div>
@@ -131,7 +131,7 @@
           {% if grp.returned_rows %}
             {% set clear_label = _n("Delete {n} returned record", "Delete {n} returned records", grp.returned_rows) %}
             <form method="post" action="{{ url_for('clear_returned', person_id=grp.id) }}"
-                  onsubmit="return confirm({{ _("{action} with {name}? They disappear from your ledger only — {name} keeps their own copy.", action=clear_label, name=name)|tojson|forceescape }})">
+                  data-confirm="{{ _("{action} with {name}? They disappear from your ledger only — {name} keeps their own copy.", action=clear_label, name=name) }}">
               <input type="hidden" name="direction" value="{{ direction }}">
               <button class="btn btn-sm btn-icon btn-clear" title="{{ clear_label }}" aria-label="{{ clear_label }}">
                 <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10M9 9v4M11 9v4"/></svg>
