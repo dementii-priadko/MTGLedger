@@ -102,6 +102,7 @@ def verify_telegram_auth(data):
     """Check a Telegram Login Widget payload, per https://core.telegram.org/widgets/login#checking-authorization"""
     data = dict(data)
     received_hash = data.pop("hash", "")
+    data.pop("redirect", None)  # ours, not Telegram's: not signed (it's limited to same-site paths instead)
     if not BOT_TOKEN or not received_hash:
         return False
     if not hmac.compare_digest(telegram_auth_hash(data), received_hash):
@@ -314,13 +315,12 @@ def decode_start_path(param):
     return safe_path(path) or "/"
 
 
-def signed_login_url(tg_user, path):
-    """A /auth/telegram link signed exactly like the Login Widget would sign it, for this Telegram user."""
-    data = {key: str(tg_user[key]) for key in ("id", "first_name", "last_name", "username") if tg_user.get(key)}
-    data.update(auth_date=str(int(time.time())), redirect=path)
-    data["hash"] = telegram_auth_hash(data)
+def login_button(text, path):
+    """A Telegram login button: Telegram asks "Log in to <domain> as <name>?" and then opens the URL
+    with the user's signed identity appended (same signature as the Login Widget)."""
     base = PUBLIC_URL or request.host_url.rstrip("/")
-    return f"{base}/auth/telegram?{urllib.parse.urlencode(data)}"
+    return {"text": text, "login_url": {"url": f"{base}{url_for('auth_telegram', redirect=path)}",
+                                        "request_write_access": True}}
 
 
 def telegram_api(method, **params):
@@ -367,9 +367,9 @@ def handle_bot_update(update):
     if command == "/login" or (command == "/start" and arg.startswith("login")):
         telegram_api(
             "sendMessage", chat_id=chat_id,
-            text=bot_text(lang, "Tap the button to log in to Card Ledger. The link works for one hour — don’t share it."),
-            reply_markup={"inline_keyboard": [[{"text": bot_text(lang, "Log in to Card Ledger"),
-                                                "url": signed_login_url(user, decode_start_path(arg))}]]},
+            text=bot_text(lang, "Tap the button to log in to Card Ledger."),
+            reply_markup={"inline_keyboard": [[login_button(bot_text(lang, "Log in to Card Ledger"),
+                                                            decode_start_path(arg))]]},
         )
     else:
         telegram_api(
@@ -400,7 +400,7 @@ def auth_telegram():
     session.clear()
     session["user_id"] = upsert_telegram_user(request.args)
     session.permanent = True
-    # Links from the bot carry a (signed) page to return to.
+    # Login buttons from the bot carry the page to return to.
     return redirect(safe_path(request.args.get("redirect")) or url_for("index"))
 
 

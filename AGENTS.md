@@ -56,7 +56,7 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
   payloads older than 1h rejected):
   1. **Bot link (primary):** the login page links to `t.me/<bot>?start=login_<base64url(path)>`; the bot
      (webhook `/telegram/webhook`, secret header) replies with a button to `/auth/telegram?…&redirect=…`
-     signed the same way the Login Widget signs (`signed_login_url`). `/login` in the bot does the same.
+     `/login` in the bot does the same. The button is a Telegram `login_url` button: Telegram shows "Log in to <domain> as <name>?" and appends the signed identity; `redirect` is ours and excluded from the signature check (it must pass `safe_path`).
      `redirect` is part of the signed data and must pass `safe_path`.
   2. The Login Widget iframe ("Other ways to log in").
   3. The widget's full-page redirect flow for browsers where the iframe fails (Firefox-based).

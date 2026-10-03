@@ -61,11 +61,10 @@ UK = {
     "Button not working? Log in via telegram.org": "Кнопка не працює? Увійдіть через telegram.org",
     "Dev login": "Вхід для розробки",
     "Log in with Telegram": "Увійти через Telegram",
-    "Opens @{bot} — press Start and tap the login link it sends you.":
-        "Відкриє @{bot} — натисніть «Почати» й торкніться посилання для входу, яке він надішле.",
+    "Opens @{bot} — press Start, then tap “Log in” in the chat.":
+        "Відкриє @{bot} — натисніть «Почати», а потім «Увійти» в чаті.",
     "Other ways to log in": "Інші способи входу",
-    "Tap the button to log in to Card Ledger. The link works for one hour — don’t share it.":
-        "Натисніть кнопку, щоб увійти в Card Ledger. Посилання діє одну годину — не пересилайте його.",
+    "Tap the button to log in to Card Ledger.": "Натисніть кнопку, щоб увійти в Card Ledger.",
     "Log in to Card Ledger": "Увійти в Card Ledger",
     "Hi! This bot logs you in to Card Ledger. Send /login any time to get a login link.":
         "Привіт! Цей бот допомагає увійти в Card Ledger. Надішліть /login, щоб отримати посилання для входу.",
