@@ -1,0 +1,83 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ledger -d ledger_test"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://ledger:ledger@localhost:5432/ledger_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m py_compile app.py
+      - run: python -m pytest -v
+      - name: Docker image builds
+        run: docker build -t ledger:ci .
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://ledger.beznadijka.dev
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: 95.217.157.7
+      DEPLOY_PATH: /opt/ledger.beznadijka.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host deploy\n  HostName %s\n  User root\n  IdentityFile ~/.ssh/deploy_key\n  IdentitiesOnly yes\n' "$DEPLOY_HOST" > ~/.ssh/config
+
+      - name: Upload code
+        # --delete keeps the server in sync with the repo; excluded paths (.env) are left alone.
+        run: >
+          rsync -az --delete
+          --exclude .git --exclude .github --exclude tests --exclude .env
+          --exclude __pycache__ --exclude .venv
+          ./ deploy:$DEPLOY_PATH/
+
+      - name: Rebuild and restart
+        run: |
+          ssh deploy "cd $DEPLOY_PATH && docker compose -p ledger up -d --build --wait --remove-orphans && docker image prune -f"
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://ledger.beznadijka.dev/login) && [ "$code" = 200 ] && exit 0
+            sleep 3
+          done
+          echo "Health check failed (last status: $code)"; exit 1

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% macro loan_table(loans, other_role) %}
+  {% if loans %}
+    <table>
+      <thead>
+        <tr><th></th><th>Card</th><th>Edition</th><th>Qty</th><th>{{ other_role|capitalize }}</th><th>Added</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for l in loans %}
+        <tr class="{{ l.status }}">
+          <td>{% if l.image_url %}<img class="thumb" src="{{ l.image_url }}" alt="" loading="lazy">{% endif %}</td>
+          <td>
+            {{ l.card_name }}
+            {% if l.finish != 'nonfoil' %}<span class="badge foil">{{ finishes[l.finish] }}</span>{% endif %}
+          </td>
+          <td>{{ l.set_name }} <span class="muted">({{ l.set_code|upper }} #{{ l.collector_number }})</span></td>
+          <td>{{ l.quantity }}</td>
+          <td>
+            {% if other_role == 'lender' %}{{ person(l.lender_username, l.lender_first_name) }}
+            {% else %}{{ person(l.borrower_username, l.borrower_first_name) }}{% endif %}
+          </td>
+          <td>{{ l.created_at.strftime('%Y-%m-%d') }}</td>
+          <td>
+            {% if l.status == 'returned' %}<span class="badge returned">Returned {{ l.returned_at.strftime('%Y-%m-%d') }}</span>
+            {% else %}<span class="badge out">Out</span>{% endif %}
+          </td>
+          <td class="actions">
+            {% if l.status == 'borrowed' %}
+              <form method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}"><button>Mark returned</button></form>
+            {% else %}
+              <form method="post" action="{{ url_for('reopen', loan_id=l.id) }}"><button class="link">Undo</button></form>
+            {% endif %}
+            {% if l.created_by == g.user.id %}
+              <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
+                    onsubmit="return confirm('Delete this entry?')"><button class="link danger">Delete</button></form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">Nothing here.</p>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="filter">
+  {% if show_all %}
+    <a href="{{ url_for('index') }}">Show outstanding only</a>
+  {% else %}
+    <a href="{{ url_for('index', show='all') }}">Show returned too</a>
+  {% endif %}
+</div>
+
+<h2>Borrowed from others</h2>
+{{ loan_table(borrowed, 'lender') }}
+
+<h2>Lent to others</h2>
+{{ loan_table(lent, 'borrower') }}
+{% endblock %}

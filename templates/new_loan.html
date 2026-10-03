@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}New loan · Card Ledger{% endblock %}
+{% block content %}
+<h1>New loan</h1>
+<form method="post" class="loan-form" id="loan-form">
+  <fieldset class="direction">
+    <label><input type="radio" name="direction" value="lent" checked> I lent a card to</label>
+    <label><input type="radio" name="direction" value="borrowed"> I borrowed a card from</label>
+  </fieldset>
+
+  <label>Telegram username
+    <input name="other" list="people" placeholder="@username" required autocomplete="off">
+    <datalist id="people">
+      {% for p in people %}<option value="@{{ p.username }}">{% endfor %}
+    </datalist>
+  </label>
+
+  <label>Game
+    <select name="game" disabled><option>Magic: The Gathering</option></select>
+  </label>
+
+  <div class="card-picker">
+    <div class="fields">
+      <label>Card name
+        <input id="card-name" list="card-suggestions" placeholder="Start typing…" required autocomplete="off">
+        <datalist id="card-suggestions"></datalist>
+      </label>
+
+      <label>Edition
+        <select id="printing" disabled required><option value="">Pick a card first</option></select>
+      </label>
+
+      <label>Finish
+        <select name="finish" id="finish" required>
+          {% for value, label in finishes.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+
+      <label>Quantity
+        <input type="number" name="quantity" value="1" min="1" max="99" required>
+      </label>
+    </div>
+    <img id="preview" alt="" hidden>
+  </div>
+
+  <input type="hidden" name="scryfall_id" id="scryfall-id">
+  <button type="submit">Save</button>
+</form>
+<script src="{{ url_for('static', filename='new_loan.js') }}"></script>
+{% endblock %}

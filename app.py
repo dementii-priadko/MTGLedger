@@ -1,0 +1,383 @@
+import hashlib
+import hmac
+import json
+import os
+import re
+import ssl
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from functools import wraps
+from pathlib import Path
+
+try:
+    import certifi
+    SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    SSL_CONTEXT = ssl.create_default_context()
+
+import psycopg
+from psycopg.rows import dict_row
+from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+BASE_DIR = Path(__file__).parent
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://ledger:ledger@localhost:5433/ledger")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
+DEV_LOGIN = os.environ.get("DEV_LOGIN") == "1"
+AUTH_MAX_AGE = 24 * 3600  # reject Telegram auth payloads older than this
+
+FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+
+app = Flask(__name__)
+# Behind a tunnel / reverse proxy: trust X-Forwarded-Proto/Host so external URLs
+# (the Telegram widget's auth URL) use the public https address.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.config.update(
+    SECRET_KEY=os.environ.get("SECRET_KEY") or os.urandom(32),
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
+)
+
+
+# --- database ---------------------------------------------------------------
+
+def get_db():
+    if "db" not in g:
+        g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(_exc):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+
+def init_db():
+    with psycopg.connect(DATABASE_URL) as db:
+        # Serialize schema setup when several workers start at once.
+        db.execute("SELECT pg_advisory_xact_lock(hashtext('tcg-ledger schema'))")
+        db.execute((BASE_DIR / "schema.sql").read_text())
+
+
+# --- auth -------------------------------------------------------------------
+
+def verify_telegram_auth(data):
+    """Check a Telegram Login Widget payload, per https://core.telegram.org/widgets/login#checking-authorization"""
+    data = dict(data)
+    received_hash = data.pop("hash", "")
+    if not BOT_TOKEN or not received_hash:
+        return False
+    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data))
+    secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
+    expected = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received_hash):
+        return False
+    try:
+        return time.time() - int(data.get("auth_date", 0)) <= AUTH_MAX_AGE
+    except ValueError:
+        return False
+
+
+def merge_users(db, keep_id, drop_id):
+    """Move everything owned by placeholder `drop_id` onto `keep_id`, then delete it."""
+    db.execute("UPDATE loans SET lender_id = %s WHERE lender_id = %s", (keep_id, drop_id))
+    db.execute("UPDATE loans SET borrower_id = %s WHERE borrower_id = %s", (keep_id, drop_id))
+    db.execute("UPDATE loans SET created_by = %s WHERE created_by = %s", (keep_id, drop_id))
+    db.execute("DELETE FROM users WHERE id = %s", (drop_id,))
+
+
+def upsert_telegram_user(tg):
+    """Create or update the user for a verified Telegram identity; returns users.id."""
+    db = get_db()
+    tg_id = int(tg["id"])
+    username = tg.get("username") or None
+    profile = (tg.get("first_name"), tg.get("last_name"), tg.get("photo_url"))
+
+    user = db.execute("SELECT id FROM users WHERE telegram_id = %s", (tg_id,)).fetchone()
+    placeholder = None
+    if username:
+        placeholder = db.execute(
+            "SELECT id FROM users WHERE lower(username) = lower(%s) AND telegram_id IS NULL", (username,)
+        ).fetchone()
+
+    if user is None and placeholder is not None:
+        # First login of someone who was already recorded by @username: claim it.
+        user_id = placeholder["id"]
+        db.execute("UPDATE users SET telegram_id = %s WHERE id = %s", (tg_id, user_id))
+    elif user is None:
+        user_id = db.execute("INSERT INTO users (telegram_id) VALUES (%s) RETURNING id", (tg_id,)).fetchone()["id"]
+    else:
+        user_id = user["id"]
+        if placeholder is not None:
+            # Known user changed their @username to one somebody had pre-registered.
+            merge_users(db, user_id, placeholder["id"])
+
+    if username:
+        # Another real account may still hold this username (they renamed since); release it.
+        db.execute("UPDATE users SET username = NULL WHERE lower(username) = lower(%s) AND id <> %s", (username, user_id))
+    db.execute(
+        "UPDATE users SET username = %s, first_name = %s, last_name = %s, photo_url = %s WHERE id = %s",
+        (username, *profile, user_id),
+    )
+    db.commit()
+    return user_id
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if g.user is None:
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.before_request
+def load_user():
+    g.user = None
+    if "user_id" in session:
+        g.user = get_db().execute("SELECT * FROM users WHERE id = %s", (session["user_id"],)).fetchone()
+        if g.user is None:
+            session.clear()
+
+
+@app.route("/login")
+def login():
+    if g.user is not None:
+        return redirect(url_for("index"))
+    return render_template("login.html", bot_username=BOT_USERNAME, dev_login=DEV_LOGIN)
+
+
+@app.route("/auth/telegram")
+def auth_telegram():
+    if not verify_telegram_auth(request.args):
+        flash("Telegram login could not be verified.", "error")
+        return redirect(url_for("login"))
+    session.clear()
+    session["user_id"] = upsert_telegram_user(request.args)
+    session.permanent = True
+    return redirect(url_for("index"))
+
+
+@app.route("/auth/dev", methods=["POST"])
+def auth_dev():
+    """Local-only login that skips Telegram (enabled with DEV_LOGIN=1)."""
+    if not DEV_LOGIN:
+        abort(404)
+    username = request.form.get("username", "").strip().lstrip("@")
+    if not USERNAME_RE.match(username):
+        flash("Enter a valid username.", "error")
+        return redirect(url_for("login"))
+    # Deterministic fake Telegram id so the same name logs into the same account.
+    fake_id = -int(hashlib.sha256(username.lower().encode()).hexdigest()[:12], 16)
+    session.clear()
+    session["user_id"] = upsert_telegram_user({"id": fake_id, "username": username, "first_name": username})
+    return redirect(url_for("index"))
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# --- scryfall ---------------------------------------------------------------
+
+class ScryfallUnavailable(Exception):
+    pass
+
+
+def scryfall_card(scryfall_id):
+    """Fetch one printing from Scryfall; None if it doesn't exist."""
+    url = "https://api.scryfall.com/cards/" + urllib.parse.quote(scryfall_id)
+    req = urllib.request.Request(url, headers={"User-Agent": "tcg-ledger/0.1", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CONTEXT) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            return None
+        raise ScryfallUnavailable from e
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        raise ScryfallUnavailable from e
+
+
+def card_image(card):
+    uris = card.get("image_uris") or (card.get("card_faces") or [{}])[0].get("image_uris") or {}
+    return uris.get("normal") or uris.get("small")
+
+
+def get_or_create_mtg_card(scryfall_id, finish):
+    db = get_db()
+    row = db.execute(
+        "SELECT id FROM cards WHERE game = 'mtg' AND external_id = %s AND finish = %s", (scryfall_id, finish)
+    ).fetchone()
+    if row:
+        return row["id"]
+    try:
+        card = scryfall_card(scryfall_id)
+    except ScryfallUnavailable:
+        raise ValueError("Couldn't reach Scryfall, try again in a moment.")
+    if not card or card.get("object") != "card":
+        raise ValueError("Card not found on Scryfall.")
+    if finish not in card.get("finishes", []):
+        raise ValueError(f"This printing doesn't come in {FINISHES[finish].lower()}.")
+    return db.execute(
+        """INSERT INTO cards (game, external_id, name, set_code, set_name, collector_number, image_url, finish)
+           VALUES ('mtg', %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (card["id"], card["name"], card.get("set"), card.get("set_name"),
+         card.get("collector_number"), card_image(card), finish),
+    ).fetchone()["id"]
+
+
+# --- ledger -----------------------------------------------------------------
+
+def get_or_create_user_by_username(username):
+    db = get_db()
+    row = db.execute("SELECT id FROM users WHERE lower(username) = lower(%s)", (username,)).fetchone()
+    if row:
+        return row["id"]
+    return db.execute("INSERT INTO users (username) VALUES (%s) RETURNING id", (username,)).fetchone()["id"]
+
+
+LOAN_SELECT = """
+    SELECT l.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
+           lu.username AS lender_username, lu.first_name AS lender_first_name,
+           bu.username AS borrower_username, bu.first_name AS borrower_first_name
+    FROM loans l
+    JOIN cards c ON c.id = l.card_id
+    JOIN users lu ON lu.id = l.lender_id
+    JOIN users bu ON bu.id = l.borrower_id
+"""
+
+
+@app.template_global()
+def person(username, first_name=None):
+    return f"@{username}" if username else (first_name or "unknown")
+
+
+@app.route("/")
+@login_required
+def index():
+    show_all = request.args.get("show") == "all"
+    status_clause = "" if show_all else "AND l.status = 'borrowed'"
+    db = get_db()
+    borrowed = db.execute(
+        f"{LOAN_SELECT} WHERE l.borrower_id = %s {status_clause} ORDER BY l.status, l.created_at DESC",
+        (g.user["id"],),
+    ).fetchall()
+    lent = db.execute(
+        f"{LOAN_SELECT} WHERE l.lender_id = %s {status_clause} ORDER BY l.status, l.created_at DESC",
+        (g.user["id"],),
+    ).fetchall()
+    return render_template("index.html", borrowed=borrowed, lent=lent, show_all=show_all, finishes=FINISHES)
+
+
+@app.route("/loans/new", methods=["GET", "POST"])
+@login_required
+def new_loan():
+    db = get_db()
+    if request.method == "POST":
+        form = request.form
+        direction = form.get("direction")
+        other = form.get("other", "").strip().lstrip("@")
+        scryfall_id = form.get("scryfall_id", "").strip()
+        finish = form.get("finish", "nonfoil")
+        try:
+            quantity = int(form.get("quantity", "1"))
+        except ValueError:
+            quantity = 0
+
+        error = None
+        if direction not in ("lent", "borrowed"):
+            error = "Choose whether you lent or borrowed the card."
+        elif not USERNAME_RE.match(other):
+            error = "Enter the other person's Telegram @username."
+        elif g.user["username"] and other.lower() == g.user["username"].lower():
+            error = "You can't lend cards to yourself."
+        elif not scryfall_id:
+            error = "Pick a card and edition."
+        elif finish not in FINISHES:
+            error = "Invalid finish."
+        elif not 1 <= quantity <= 99:
+            error = "Quantity must be between 1 and 99."
+
+        if error is None:
+            try:
+                card_id = get_or_create_mtg_card(scryfall_id, finish)
+            except ValueError as e:
+                error = str(e)
+
+        if error is None:
+            other_id = get_or_create_user_by_username(other)
+            me = g.user["id"]
+            lender, borrower = (me, other_id) if direction == "lent" else (other_id, me)
+            db.execute(
+                "INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by) VALUES (%s, %s, %s, %s, %s)",
+                (card_id, lender, borrower, quantity, me),
+            )
+            db.commit()
+            flash("Loan recorded.", "ok")
+            return redirect(url_for("index"))
+        db.rollback()
+        flash(error, "error")
+
+    people = db.execute(
+        "SELECT username FROM users WHERE username IS NOT NULL AND id <> %s ORDER BY username", (g.user["id"],)
+    ).fetchall()
+    return render_template("new_loan.html", people=people, finishes=FINISHES)
+
+
+def own_loan_or_404(loan_id):
+    loan = get_db().execute("SELECT * FROM loans WHERE id = %s", (loan_id,)).fetchone()
+    if loan is None or g.user["id"] not in (loan["lender_id"], loan["borrower_id"]):
+        abort(404)
+    return loan
+
+
+@app.route("/loans/<int:loan_id>/return", methods=["POST"])
+@login_required
+def mark_returned(loan_id):
+    own_loan_or_404(loan_id)
+    db = get_db()
+    db.execute(
+        "UPDATE loans SET status = 'returned', returned_at = now() WHERE id = %s AND status = 'borrowed'",
+        (loan_id,),
+    )
+    db.commit()
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/loans/<int:loan_id>/reopen", methods=["POST"])
+@login_required
+def reopen(loan_id):
+    own_loan_or_404(loan_id)
+    db = get_db()
+    db.execute("UPDATE loans SET status = 'borrowed', returned_at = NULL WHERE id = %s", (loan_id,))
+    db.commit()
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/loans/<int:loan_id>/delete", methods=["POST"])
+@login_required
+def delete_loan(loan_id):
+    loan = own_loan_or_404(loan_id)
+    if loan["created_by"] != g.user["id"]:
+        abort(403)
+    db = get_db()
+    db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
+    db.commit()
+    return redirect(request.referrer or url_for("index"))
+
+
+init_db()
+
+if __name__ == "__main__":
+    app.run(debug=True, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 3000)))
