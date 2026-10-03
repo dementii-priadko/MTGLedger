@@ -103,6 +103,8 @@ svg { flex: none; }
 .btn-icon { width: 30px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
 .btn-icon:hover { color: var(--text); background: var(--surface-2); }
 .btn-icon svg circle { fill: currentColor; stroke: none; }
+.btn-clear:hover { color: var(--danger); background: var(--danger-soft); }
+.person-head form { margin: 0; display: contents; }
 .btn-lg { height: 48px; font-size: 15px; border-radius: 12px; }
 .btn-block { width: 100%; }
 

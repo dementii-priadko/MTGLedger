@@ -95,6 +95,8 @@ UK = {
     "More actions": "Інші дії",
     "Delete this entry? This can’t be undone.": "Видалити цей запис? Цю дію не можна скасувати.",
     "Delete entry": "Видалити запис",
+    "{action} with {name}? They disappear from your ledger only — {name} keeps their own copy.":
+        "{action} з {name}? Їх буде видалено лише з вашого обліку — у {name} залишиться власна копія.",
 
     # return-several dialog
     "What did {name} give back?": "Що повернув(-ла) {name}?",
@@ -190,6 +192,10 @@ UK_PLURAL = {
                                                     "У позиці може бути щонайбільше {n} різні карти.",
                                                     "У позиці може бути щонайбільше {n} різних карт."],
     "{n} day ago": ["{n} день тому", "{n} дні тому", "{n} днів тому"],
+    "Delete {n} returned record": ["Видалити {n} повернутий запис", "Видалити {n} повернуті записи",
+                                   "Видалити {n} повернутих записів"],
+    "Deleted {n} returned record.": ["Видалено {n} повернутий запис.", "Видалено {n} повернуті записи.",
+                                     "Видалено {n} повернутих записів."],
 }
 
 CATALOGS = {"uk": UK}

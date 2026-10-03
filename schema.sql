@@ -48,3 +48,7 @@ CREATE INDEX IF NOT EXISTS loans_borrower ON loans (borrower_id, status);
 -- Cards recorded together as one loan share a batch id (added after the initial schema).
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS batch_id UUID;
 CREATE INDEX IF NOT EXISTS loans_batch ON loans (batch_id);
+
+-- Each side can clear settled (returned) records from their own view; a row both sides cleared is deleted.
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_lender BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_borrower BOOLEAN NOT NULL DEFAULT false;

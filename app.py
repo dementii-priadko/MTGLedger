@@ -392,12 +392,17 @@ def ago(ts):
     return ts.strftime("%-d %b %Y")
 
 
-def group_by_person(loans, role):
-    """Group loans by the other party (`role` is 'lender' or 'borrower'), most cards outstanding first."""
+def group_by_person(loans, role, returned_counts):
+    """Group loans by the other party (`role` is 'lender' or 'borrower'), most cards outstanding first.
+
+    `returned_counts` maps person id -> number of returned records still in the viewer's ledger.
+    """
     groups = {}
     for loan in loans:
         pid = loan[f"{role}_id"]
         group = groups.setdefault(pid, {
+            "id": pid,
+            "returned_rows": returned_counts.get(pid, 0),
             "username": loan[f"{role}_username"],
             "first_name": loan[f"{role}_first_name"],
             "photo_url": loan[f"{role}_photo_url"],
@@ -425,14 +430,28 @@ def index():
     show_all = request.args.get("show") == "all"
     status_clause = "" if show_all else "AND l.status = 'borrowed'"
     db = get_db()
+    me = g.user["id"]
     borrowed = db.execute(
-        f"{LOAN_SELECT} WHERE l.borrower_id = %s {status_clause} ORDER BY l.status, l.created_at DESC",
-        (g.user["id"],),
+        f"""{LOAN_SELECT} WHERE l.borrower_id = %s AND NOT l.hidden_by_borrower {status_clause}
+            ORDER BY l.status, l.created_at DESC""",
+        (me,),
     ).fetchall()
     lent = db.execute(
-        f"{LOAN_SELECT} WHERE l.lender_id = %s {status_clause} ORDER BY l.status, l.created_at DESC",
-        (g.user["id"],),
+        f"""{LOAN_SELECT} WHERE l.lender_id = %s AND NOT l.hidden_by_lender {status_clause}
+            ORDER BY l.status, l.created_at DESC""",
+        (me,),
     ).fetchall()
+    returned = {"lent": {}, "borrowed": {}}
+    for row in db.execute(
+        """SELECT CASE WHEN lender_id = %(me)s THEN 'lent' ELSE 'borrowed' END AS side,
+                  CASE WHEN lender_id = %(me)s THEN borrower_id ELSE lender_id END AS other, count(*) AS n
+           FROM loans
+           WHERE status = 'returned'
+             AND ((lender_id = %(me)s AND NOT hidden_by_lender) OR (borrower_id = %(me)s AND NOT hidden_by_borrower))
+           GROUP BY 1, 2""",
+        {"me": me},
+    ):
+        returned[row["side"]][row["other"]] = row["n"]
     stats = db.execute(
         """SELECT COALESCE(SUM(quantity) FILTER (WHERE lender_id = %(me)s), 0) AS lent_cards,
                   COUNT(DISTINCT borrower_id) FILTER (WHERE lender_id = %(me)s) AS lent_people,
@@ -443,8 +462,8 @@ def index():
     ).fetchone()
     return render_template(
         "index.html",
-        lent_groups=group_by_person(lent, "borrower"),
-        borrowed_groups=group_by_person(borrowed, "lender"),
+        lent_groups=group_by_person(lent, "borrower", returned["lent"]),
+        borrowed_groups=group_by_person(borrowed, "lender", returned["borrowed"]),
         stats=stats,
         show_all=show_all,
         finishes=FINISHES,
@@ -611,8 +630,39 @@ def reopen(loan_id):
             db.execute("UPDATE loans SET quantity = quantity + %s WHERE id = %s", (loan["quantity"], sibling["id"]))
             db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
         else:
-            db.execute("UPDATE loans SET status = 'borrowed', returned_at = NULL WHERE id = %s", (loan_id,))
+            db.execute(
+                """UPDATE loans SET status = 'borrowed', returned_at = NULL,
+                                    hidden_by_lender = false, hidden_by_borrower = false
+                   WHERE id = %s""",
+                (loan_id,),
+            )
     db.commit()
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/people/<int:person_id>/clear-returned", methods=["POST"])
+@login_required
+def clear_returned(person_id):
+    """Remove returned records with one person from the current user's ledger.
+
+    The other side keeps their copy (so nobody can erase a loan by marking it returned and deleting it);
+    rows that both sides have cleared are deleted for good.
+    """
+    side = request.form.get("direction")
+    if side not in ("lent", "borrowed"):
+        abort(400)
+    me, flag = g.user["id"], "hidden_by_lender" if side == "lent" else "hidden_by_borrower"
+    lender, borrower = (me, person_id) if side == "lent" else (person_id, me)
+    db = get_db()
+    cleared = db.execute(
+        f"""UPDATE loans SET {flag} = true
+            WHERE lender_id = %s AND borrower_id = %s AND status = 'returned' AND NOT {flag}""",
+        (lender, borrower),
+    ).rowcount
+    db.execute("DELETE FROM loans WHERE status = 'returned' AND hidden_by_lender AND hidden_by_borrower")
+    db.commit()
+    if cleared:
+        flash(_n("Deleted {n} returned record.", "Deleted {n} returned records.", cleared), "ok")
     return redirect(request.referrer or url_for("index"))
 
 

@@ -139,6 +139,16 @@
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg><span class="hide-sm">{{ _("Return several") }}</span>
             </button>
           {% endif %}
+          {% if grp.returned_rows %}
+            {% set clear_label = _n("Delete {n} returned record", "Delete {n} returned records", grp.returned_rows) %}
+            <form method="post" action="{{ url_for('clear_returned', person_id=grp.id) }}"
+                  onsubmit="return confirm({{ _("{action} with {name}? They disappear from your ledger only — {name} keeps their own copy.", action=clear_label, name=name)|tojson|forceescape }})">
+              <input type="hidden" name="direction" value="{{ direction }}">
+              <button class="btn btn-sm btn-icon btn-clear" title="{{ clear_label }}" aria-label="{{ clear_label }}">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10M9 9v4M11 9v4"/></svg>
+              </button>
+            </form>
+          {% endif %}
           {% if grp.username %}
             <a class="btn btn-sm btn-icon" href="{{ url_for('new_loan', direction=direction, other=grp.username) }}"
                title="{{ _("Add another card with {name}", name=name) }}" aria-label="{{ _("Add another card with {name}", name=name) }}">

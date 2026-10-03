@@ -356,3 +356,60 @@ def test_return_several_is_all_or_nothing(make_client, query):
 def test_return_several_needs_selection(make_client):
     resp = make_client("alice").post("/returns", data={}, follow_redirects=True)
     assert b"Select the cards that came back" in resp.data
+
+
+# --- clearing returned records ----------------------------------------------
+
+def bob_id(query):
+    return query("SELECT id FROM users WHERE username = 'bob'")[0][0]
+
+
+def test_clear_returned_hides_only_for_me_and_keeps_active(make_client, query):
+    alice = make_client("alice")
+    lend_many(alice, [("bolt-m10", "nonfoil", 3), ("sol-ring-cmm", "foil", 1)])
+    alice.post("/loans/1/return", data={"quantity": "1"})   # row 3: 1 Bolt returned, 2 still out
+    alice.post("/loans/2/return")                           # Sol Ring returned
+    page = alice.get("/?show=all").get_data(as_text=True)
+    assert "Delete 2 returned records" in page
+
+    resp = alice.post(f"/people/{bob_id(query)}/clear-returned", data={"direction": "lent"}, follow_redirects=True)
+    assert b"Deleted 2 returned records." in resp.data
+    page = alice.get("/?show=all").get_data(as_text=True)
+    assert page.count('class="tile ') == 1 and "Delete 2 returned" not in page   # only the 2 Bolts still out
+    # bob still sees the full history
+    assert make_client("bob").get("/?show=all").get_data(as_text=True).count('class="tile ') == 3
+    assert query("SELECT count(*) FROM loans") == [(3,)]
+
+
+def test_rows_cleared_by_both_sides_are_deleted(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    alice.post("/loans/1/return")
+    bob = make_client("bob")
+    alice_id = query("SELECT id FROM users WHERE username = 'alice'")[0][0]
+    alice.post(f"/people/{bob_id(query)}/clear-returned", data={"direction": "lent"})
+    assert query("SELECT count(*) FROM loans") == [(1,)]
+    bob.post(f"/people/{alice_id}/clear-returned", data={"direction": "borrowed"})
+    assert query("SELECT count(*) FROM loans") == [(0,)]
+
+
+def test_clearing_cannot_touch_active_loans_or_other_people(make_client, query):
+    lend(make_client("alice"))                                # active alice -> bob
+    lend(make_client("carol"), other="@bob")                  # carol -> bob
+    make_client("carol").post("/loans/2/return")
+    bob = make_client("bob")
+    alice_id = query("SELECT id FROM users WHERE username = 'alice'")[0][0]
+    bob.post(f"/people/{alice_id}/clear-returned", data={"direction": "borrowed"})
+    assert query("SELECT id, hidden_by_lender, hidden_by_borrower FROM loans ORDER BY id") == [
+        (1, False, False), (2, False, False)]
+    assert bob.post(f"/people/{alice_id}/clear-returned", data={"direction": "sideways"}).status_code == 400
+
+
+def test_undo_by_other_side_brings_cleared_record_back(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    alice.post("/loans/1/return")
+    alice.post(f"/people/{bob_id(query)}/clear-returned", data={"direction": "lent"})
+    make_client("bob").post("/loans/1/reopen")               # bob says: actually I still have it
+    assert query("SELECT status, hidden_by_lender FROM loans") == [("borrowed", False)]
+    assert "Lightning Bolt" in alice.get("/").get_data(as_text=True)

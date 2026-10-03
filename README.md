@@ -68,3 +68,19 @@ English and Ukrainian. The language follows the browser's `Accept-Language` unti
 Strings live in `i18n.py`: English source text is the key, `UK` holds plain translations and
 `UK_PLURAL` the three Ukrainian plural forms. Use `_("…")` / `_n("…", "…", n)` in Python and templates,
 `t("…")` / `tn("…", "…", n)` in browser scripts. `tests/test_i18n.py` fails if a string has no translation.
+
+## Daily backup
+
+The `backup` service (`backup.py --daemon`) sends a CSV of all active loans to a Telegram user every day
+at `BACKUP_TIME` (default 09:00) in `BACKUP_TZ` (default Europe/Kyiv). Set `BACKUP_TELEGRAM_USERNAME`
+(the person must have logged in once, with permission for the bot to message them) or `BACKUP_CHAT_ID`
+in the server's `.env`; without either the service stays idle. Failed sends are retried with backoff.
+
+Send one right away: `docker compose -p ledger exec backup python backup.py --now`.
+Print the CSV instead: `python backup.py --stdout`.
+
+## Clearing returned records
+
+Each person can delete returned records with someone from their own ledger (trash icon next to the
+person). The other side keeps their copy, so marking a loan returned and deleting it can't erase it for
+the lender; rows cleared by both sides are deleted from the database.

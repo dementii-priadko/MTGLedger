@@ -30,5 +30,19 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Daily CSV of active loans to a Telegram user (see backup.py). Idle unless a recipient is configured.
+  backup:
+    build: .
+    command: ["python", "-u", "backup.py", "--daemon"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://ledger:${POSTGRES_PASSWORD:-ledger}@db:5432/ledger
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:

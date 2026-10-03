@@ -2,3 +2,4 @@ flask>=3.0
 certifi
 psycopg[binary]>=3.1
 gunicorn
+tzdata
