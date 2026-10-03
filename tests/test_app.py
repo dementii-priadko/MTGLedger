@@ -174,3 +174,41 @@ def test_login_page_has_redirect_fallback(make_client):
     assert url.netloc == "oauth.telegram.org" and url.path == "/auth"
     assert parse_qs(url.query) == {"bot_id": ["123"], "origin": ["https://ledger.example"],
                                    "request_access": ["write"], "return_to": ["https://ledger.example/login"]}
+
+
+# --- home page summary & grouping -------------------------------------------
+
+def test_summary_counts_outstanding_cards_and_people(make_client):
+    alice = make_client("alice")
+    lend(alice, other="@bob", quantity="2")
+    lend(alice, other="@carol", card="sol-ring-cmm")
+    lend(alice, other="@dave", direction="borrowed", quantity="3")
+    alice.post("/loans/2/return")
+    page = alice.get("/").get_data(as_text=True)
+    assert "cards with 1 person" in page        # carol's loan was returned
+    assert "cards from 1 person" in page
+    assert page.count('class="tile ') == 2       # returned one hidden by default
+    assert alice.get("/?show=all").get_data(as_text=True).count('class="tile ') == 3
+
+
+def test_loans_grouped_per_person_with_action_labels(make_client):
+    alice = make_client("alice")
+    lend(alice, other="@bob")
+    lend(alice, other="@bob", card="sol-ring-cmm")
+    lend(alice, other="@carol", direction="borrowed")
+    page = alice.get("/").get_data(as_text=True)
+    assert page.count('class="person-group"') == 2
+    assert "2 cards out" in page
+    assert "Got it back" in page and "Gave it back" in page
+
+
+def test_new_loan_prefill_from_query(make_client):
+    page = make_client("alice").get("/loans/new?direction=borrowed&other=bob").get_data(as_text=True)
+    assert 'value="borrowed" checked' in page
+    assert 'value="bob"' in page
+
+
+def test_new_loan_redirects_to_matching_tab(make_client):
+    resp = make_client("alice").post("/loans/new", data={
+        "direction": "borrowed", "other": "@bob", "scryfall_id": "bolt-m10", "finish": "nonfoil", "quantity": "1"})
+    assert resp.headers["Location"] == "/#borrowed"

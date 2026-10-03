@@ -4,24 +4,63 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Card Ledger{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='17' height='24' rx='3' fill='%23e3b65a' transform='rotate(12 17 15)'/%3E%3Crect x='5' y='5' width='17' height='24' rx='3' fill='%23161a20' stroke='%23e3b65a' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  <header>
-    <a class="brand" href="{{ url_for('index') }}">Card Ledger</a>
-    {% if g.user %}
-      <nav>
-        <a href="{{ url_for('new_loan') }}" class="button">+ New loan</a>
-        <span class="me">{{ person(g.user.username, g.user.first_name) }}</span>
-        <form method="post" action="{{ url_for('logout') }}"><button class="link">Log out</button></form>
+<body class="{% block body_class %}{% endblock %}">
+  {% if g.user %}
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="{{ url_for('index') }}">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="17" height="24" rx="3" transform="rotate(12 17 15)"/><rect x="5" y="5" width="17" height="24" rx="3"/></svg>
+        <span>Card Ledger</span>
+      </a>
+      <nav class="topbar-actions">
+        <a href="{{ url_for('new_loan') }}" class="btn btn-primary">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+          <span>New loan</span>
+        </a>
+        <details class="menu">
+          <summary aria-label="Account">
+            {% set me = person(g.user.username, g.user.first_name) %}
+            {% if g.user.photo_url %}<img class="avatar" src="{{ g.user.photo_url }}" alt="">
+            {% else %}<span class="avatar" style="--hue: {{ avatar_hue(me) }}">{{ me.lstrip('@')[:1]|upper }}</span>{% endif %}
+          </summary>
+          <div class="menu-panel">
+            <div class="menu-head">
+              <strong>{{ g.user.first_name or me }}</strong>
+              {% if g.user.username %}<span class="muted">@{{ g.user.username }}</span>{% endif %}
+            </div>
+            <form method="post" action="{{ url_for('logout') }}"><button class="menu-item">Log out</button></form>
+          </div>
+        </details>
       </nav>
-    {% endif %}
+    </div>
   </header>
-  <main>
+  {% endif %}
+
+  <div class="toasts" aria-live="polite">
     {% for category, message in get_flashed_messages(with_categories=true) %}
-      <p class="flash {{ category }}">{{ message }}</p>
+      <div class="toast {{ category }}" role="status">{{ message }}</div>
     {% endfor %}
+  </div>
+
+  <main class="{% block main_class %}container{% endblock %}">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // Close dropdown menus on outside click / Escape; remove toasts once faded.
+    document.addEventListener("click", (e) => {
+      for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(e.target)) m.open = false;
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") for (const m of document.querySelectorAll("details.menu[open]")) m.open = false;
+    });
+    for (const t of document.querySelectorAll(".toast")) setTimeout(() => t.remove(), t.classList.contains("error") ? 8000 : 4500);
+  </script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

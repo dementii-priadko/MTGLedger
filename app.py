@@ -5,6 +5,7 @@ import os
 import re
 import ssl
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -262,8 +263,8 @@ def get_or_create_user_by_username(username):
 
 LOAN_SELECT = """
     SELECT l.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
-           lu.username AS lender_username, lu.first_name AS lender_first_name,
-           bu.username AS borrower_username, bu.first_name AS borrower_first_name
+           lu.username AS lender_username, lu.first_name AS lender_first_name, lu.photo_url AS lender_photo_url,
+           bu.username AS borrower_username, bu.first_name AS borrower_first_name, bu.photo_url AS borrower_photo_url
     FROM loans l
     JOIN cards c ON c.id = l.card_id
     JOIN users lu ON lu.id = l.lender_id
@@ -274,6 +275,41 @@ LOAN_SELECT = """
 @app.template_global()
 def person(username, first_name=None):
     return f"@{username}" if username else (first_name or "unknown")
+
+
+@app.template_global()
+def avatar_hue(name):
+    return int(hashlib.md5((name or "").lower().encode()).hexdigest()[:4], 16) % 360
+
+
+@app.template_filter("ago")
+def ago(ts):
+    days = (datetime.now(timezone.utc).date() - ts.astimezone(timezone.utc).date()).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 30:
+        return f"{days} days ago"
+    return ts.strftime("%-d %b %Y")
+
+
+def group_by_person(loans, role):
+    """Group loans by the other party (`role` is 'lender' or 'borrower'), most cards outstanding first."""
+    groups = {}
+    for loan in loans:
+        pid = loan[f"{role}_id"]
+        group = groups.setdefault(pid, {
+            "username": loan[f"{role}_username"],
+            "first_name": loan[f"{role}_first_name"],
+            "photo_url": loan[f"{role}_photo_url"],
+            "loans": [],
+            "out": 0,
+        })
+        group["loans"].append(loan)
+        if loan["status"] == "borrowed":
+            group["out"] += loan["quantity"]
+    return sorted(groups.values(), key=lambda g: (-g["out"], (g["username"] or g["first_name"] or "").lower()))
 
 
 @app.route("/")
@@ -290,7 +326,22 @@ def index():
         f"{LOAN_SELECT} WHERE l.lender_id = %s {status_clause} ORDER BY l.status, l.created_at DESC",
         (g.user["id"],),
     ).fetchall()
-    return render_template("index.html", borrowed=borrowed, lent=lent, show_all=show_all, finishes=FINISHES)
+    stats = db.execute(
+        """SELECT COALESCE(SUM(quantity) FILTER (WHERE lender_id = %(me)s), 0) AS lent_cards,
+                  COUNT(DISTINCT borrower_id) FILTER (WHERE lender_id = %(me)s) AS lent_people,
+                  COALESCE(SUM(quantity) FILTER (WHERE borrower_id = %(me)s), 0) AS borrowed_cards,
+                  COUNT(DISTINCT lender_id) FILTER (WHERE borrower_id = %(me)s) AS borrowed_people
+           FROM loans WHERE status = 'borrowed' AND %(me)s IN (lender_id, borrower_id)""",
+        {"me": g.user["id"]},
+    ).fetchone()
+    return render_template(
+        "index.html",
+        lent_groups=group_by_person(lent, "borrower"),
+        borrowed_groups=group_by_person(borrowed, "lender"),
+        stats=stats,
+        show_all=show_all,
+        finishes=FINISHES,
+    )
 
 
 @app.route("/loans/new", methods=["GET", "POST"])
@@ -338,14 +389,20 @@ def new_loan():
             )
             db.commit()
             flash("Loan recorded.", "ok")
-            return redirect(url_for("index"))
+            return redirect(url_for("index", _anchor=direction))
         db.rollback()
         flash(error, "error")
 
+    # People you've dealt with, most recent first, offered as quick picks.
     people = db.execute(
-        "SELECT username FROM users WHERE username IS NOT NULL AND id <> %s ORDER BY username", (g.user["id"],)
+        """SELECT u.username, u.first_name, u.photo_url, MAX(l.created_at) AS last
+           FROM loans l JOIN users u ON u.id = CASE WHEN l.lender_id = %(me)s THEN l.borrower_id ELSE l.lender_id END
+           WHERE %(me)s IN (l.lender_id, l.borrower_id) AND u.username IS NOT NULL
+           GROUP BY u.id ORDER BY last DESC LIMIT 12""",
+        {"me": g.user["id"]},
     ).fetchall()
-    return render_template("new_loan.html", people=people, finishes=FINISHES)
+    prefill = request.form if request.method == "POST" else request.args
+    return render_template("new_loan.html", people=people, finishes=FINISHES, prefill=prefill)
 
 
 def own_loan_or_404(loan_id):

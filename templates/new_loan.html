@@ -1,50 +1,102 @@
 {% extends "base.html" %}
 {% block title %}New loan · Card Ledger{% endblock %}
 {% block content %}
-<h1>New loan</h1>
-<form method="post" class="loan-form" id="loan-form">
-  <fieldset class="direction">
-    <label><input type="radio" name="direction" value="lent" checked> I lent a card to</label>
-    <label><input type="radio" name="direction" value="borrowed"> I borrowed a card from</label>
-  </fieldset>
+<a class="back" href="{{ url_for('index') }}">
+  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4l-6 6 6 6"/></svg>Ledger
+</a>
+<h1 class="page-title">Record a loan</h1>
 
-  <label>Telegram username
-    <input name="other" list="people" placeholder="@username" required autocomplete="off">
-    <datalist id="people">
-      {% for p in people %}<option value="@{{ p.username }}">{% endfor %}
-    </datalist>
-  </label>
+<form method="post" class="loan-layout" id="loan-form" novalidate>
+  <div class="loan-steps">
+    <section class="step">
+      <h2 class="step-title"><span class="step-num">1</span>Who?</h2>
+      <div class="segmented" role="radiogroup" aria-label="Direction">
+        <label><input type="radio" name="direction" value="lent" {{ 'checked' if prefill.get('direction', 'lent') != 'borrowed' }}>
+          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>I lent a card</span></label>
+        <label><input type="radio" name="direction" value="borrowed" {{ 'checked' if prefill.get('direction') == 'borrowed' }}>
+          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>I borrowed a card</span></label>
+      </div>
 
-  <label>Game
-    <select name="game" disabled><option>Magic: The Gathering</option></select>
-  </label>
-
-  <div class="card-picker">
-    <div class="fields">
-      <label>Card name
-        <input id="card-name" list="card-suggestions" placeholder="Start typing…" required autocomplete="off">
-        <datalist id="card-suggestions"></datalist>
+      <label class="field">
+        <span class="field-label" id="other-label">{{ 'Borrowed from' if prefill.get('direction') == 'borrowed' else 'Lent to' }}</span>
+        <span class="input-prefix">
+          <span aria-hidden="true">@</span>
+          <input name="other" id="other" placeholder="telegram_username" required autocomplete="off"
+                 autocapitalize="off" spellcheck="false" value="{{ prefill.get('other', '')|replace('@', '') }}">
+        </span>
       </label>
+      {% if people %}
+        <div class="chips" aria-label="Recent people">
+          {% for p in people %}
+            <button type="button" class="chip" data-username="{{ p.username }}">
+              {% if p.photo_url %}<img class="avatar avatar-xs" src="{{ p.photo_url }}" alt="">
+              {% else %}<span class="avatar avatar-xs" style="--hue: {{ avatar_hue('@' ~ p.username) }}" aria-hidden="true">{{ p.username[:1]|upper }}</span>{% endif %}
+              @{{ p.username }}
+            </button>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
 
-      <label>Edition
-        <select id="printing" disabled required><option value="">Pick a card first</option></select>
-      </label>
+    <section class="step">
+      <h2 class="step-title"><span class="step-num">2</span>Which card?</h2>
+      <div class="field combo">
+        <label class="field-label" for="card-name">Card name <span class="muted">· Magic: The Gathering</span></label>
+        <div class="search">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>
+          <input id="card-name" placeholder="Start typing, e.g. Lightning Bolt" autocomplete="off" spellcheck="false"
+                 role="combobox" aria-expanded="false" aria-controls="card-suggestions" aria-autocomplete="list">
+        </div>
+        <ul class="suggestions" id="card-suggestions" role="listbox" hidden></ul>
+      </div>
 
-      <label>Finish
-        <select name="finish" id="finish" required>
-          {% for value, label in finishes.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-        </select>
-      </label>
+      <div class="printings-wrap" id="printings-wrap" hidden>
+        <div class="printings-head">
+          <span class="field-label">Edition <span class="muted" id="printing-count"></span></span>
+          <input type="search" id="printing-filter" class="input-sm" placeholder="Filter sets" hidden>
+        </div>
+        <div class="printings" id="printings" role="radiogroup" aria-label="Edition"></div>
+      </div>
+      <p class="hint" id="printings-status" hidden></p>
+    </section>
 
-      <label>Quantity
-        <input type="number" name="quantity" value="1" min="1" max="99" required>
-      </label>
-    </div>
-    <img id="preview" alt="" hidden>
+    <section class="step">
+      <h2 class="step-title"><span class="step-num">3</span>Details</h2>
+      <div class="details-row">
+        <div class="field">
+          <span class="field-label">Finish</span>
+          <div class="pills" role="radiogroup" aria-label="Finish">
+            {% for value, label in finishes.items() %}
+              <label class="pill-option"><input type="radio" name="finish" value="{{ value }}" {{ 'checked' if loop.first }}><span>{{ label }}</span></label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="qty-label">Quantity</span>
+          <div class="stepper" aria-labelledby="qty-label">
+            <button type="button" data-step="-1" aria-label="Decrease">−</button>
+            <input type="number" name="quantity" id="quantity" value="{{ prefill.get('quantity', 1) }}" min="1" max="99" inputmode="numeric" aria-labelledby="qty-label">
+            <button type="button" data-step="1" aria-label="Increase">+</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
-  <input type="hidden" name="scryfall_id" id="scryfall-id">
-  <button type="submit">Save</button>
+  <aside class="loan-preview">
+    <div class="preview-card art" id="preview-art">
+      <div class="preview-empty" id="preview-empty">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="17" height="24" rx="3" transform="rotate(12 17 15)"/><rect x="5" y="5" width="17" height="24" rx="3"/></svg>
+        <span>Pick a card to preview it</span>
+      </div>
+      <img id="preview" alt="" hidden>
+    </div>
+    <p class="preview-summary" id="summary">&nbsp;</p>
+    <button type="submit" class="btn btn-primary btn-lg btn-block" id="submit">Record loan</button>
+  </aside>
 </form>
+{% endblock %}
+
+{% block scripts %}
 <script src="{{ url_for('static', filename='new_loan.js') }}"></script>
 {% endblock %}

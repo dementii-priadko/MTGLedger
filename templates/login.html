@@ -1,28 +1,42 @@
 {% extends "base.html" %}
+{% block body_class %}login-page{% endblock %}
+{% block main_class %}login-main{% endblock %}
 {% block content %}
-<section class="login">
-  <h1>Track who has your cards</h1>
-  <p>Sign in with Telegram to see what you've lent and borrowed.</p>
+<div class="login-card">
+  <div class="fan" aria-hidden="true">
+    <span class="fan-card c1"></span><span class="fan-card c2"></span><span class="fan-card c3"></span>
+  </div>
+  <div class="brand brand-lg">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="17" height="24" rx="3" transform="rotate(12 17 15)"/><rect x="5" y="5" width="17" height="24" rx="3"/></svg>
+    <span>Card Ledger</span>
+  </div>
+  <h1>Know where every card is.</h1>
+  <p class="muted">Keep track of the Magic cards you lend to friends and the ones you borrow, down to the exact edition and foil.</p>
+
   {% if bot_username %}
-    <script async src="https://telegram.org/js/telegram-widget.js?22"
-            data-telegram-login="{{ bot_username }}"
-            data-size="large"
-            data-auth-url="{{ url_for('auth_telegram', _external=True) }}"
-            data-request-access="write"></script>
+    <div class="tg-widget">
+      <script async src="https://telegram.org/js/telegram-widget.js?22"
+              data-telegram-login="{{ bot_username }}"
+              data-size="large"
+              data-radius="10"
+              data-auth-url="{{ url_for('auth_telegram', _external=True) }}"
+              data-request-access="write"></script>
+    </div>
     {% if redirect_login_url %}
       <p class="alt-login"><a href="{{ redirect_login_url }}">Button not working? Log in via telegram.org</a></p>
     {% endif %}
   {% else %}
-    <p class="flash error">TELEGRAM_BOT_USERNAME is not configured.</p>
+    <p class="notice error">TELEGRAM_BOT_USERNAME is not configured.</p>
   {% endif %}
 
   {% if dev_login %}
     <form method="post" action="{{ url_for('auth_dev') }}" class="dev-login">
-      <label>Dev login (DEV_LOGIN=1)
-        <input name="username" placeholder="username" required>
-      </label>
-      <button>Log in</button>
+      <span class="field-label">Dev login</span>
+      <div class="dev-login-row">
+        <span class="input-prefix"><span aria-hidden="true">@</span><input name="username" placeholder="username" required aria-label="Username"></span>
+        <button class="btn">Log in</button>
+      </div>
     </form>
   {% endif %}
-</section>
+</div>
 {% endblock %}

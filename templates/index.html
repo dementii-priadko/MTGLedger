@@ -1,62 +1,131 @@
 {% extends "base.html" %}
 
-{% macro loan_table(loans, other_role) %}
-  {% if loans %}
-    <table>
-      <thead>
-        <tr><th></th><th>Card</th><th>Edition</th><th>Qty</th><th>{{ other_role|capitalize }}</th><th>Added</th><th>Status</th><th></th></tr>
-      </thead>
-      <tbody>
-      {% for l in loans %}
-        <tr class="{{ l.status }}">
-          <td>{% if l.image_url %}<img class="thumb" src="{{ l.image_url }}" alt="" loading="lazy">{% endif %}</td>
-          <td>
-            {{ l.card_name }}
-            {% if l.finish != 'nonfoil' %}<span class="badge foil">{{ finishes[l.finish] }}</span>{% endif %}
-          </td>
-          <td>{{ l.set_name }} <span class="muted">({{ l.set_code|upper }} #{{ l.collector_number }})</span></td>
-          <td>{{ l.quantity }}</td>
-          <td>
-            {% if other_role == 'lender' %}{{ person(l.lender_username, l.lender_first_name) }}
-            {% else %}{{ person(l.borrower_username, l.borrower_first_name) }}{% endif %}
-          </td>
-          <td>{{ l.created_at.strftime('%Y-%m-%d') }}</td>
-          <td>
-            {% if l.status == 'returned' %}<span class="badge returned">Returned {{ l.returned_at.strftime('%Y-%m-%d') }}</span>
-            {% else %}<span class="badge out">Out</span>{% endif %}
-          </td>
-          <td class="actions">
-            {% if l.status == 'borrowed' %}
-              <form method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}"><button>Mark returned</button></form>
-            {% else %}
-              <form method="post" action="{{ url_for('reopen', loan_id=l.id) }}"><button class="link">Undo</button></form>
-            {% endif %}
-            {% if l.created_by == g.user.id %}
-              <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
-                    onsubmit="return confirm('Delete this entry?')"><button class="link danger">Delete</button></form>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p class="muted">Nothing here.</p>
-  {% endif %}
+{% macro avatar(username, first_name, photo_url, cls="avatar") %}
+  {% set name = person(username, first_name) %}
+  {% if photo_url %}<img class="{{ cls }}" src="{{ photo_url }}" alt="">
+  {% else %}<span class="{{ cls }}" style="--hue: {{ avatar_hue(name) }}" aria-hidden="true">{{ name.lstrip('@')[:1]|upper }}</span>{% endif %}
+{% endmacro %}
+
+{% macro tile(l, other, direction) %}
+  <article class="tile {{ l.status }}" data-search="{{ (l.card_name ~ ' ' ~ l.set_name ~ ' ' ~ l.set_code ~ ' ' ~ other)|lower }}">
+    <div class="art finish-{{ l.finish }}">
+      {% if l.image_url %}<img src="{{ l.image_url }}" alt="{{ l.card_name }}" loading="lazy">
+      {% else %}<div class="art-fallback">{{ l.card_name }}</div>{% endif %}
+      {% if l.quantity > 1 %}<span class="qty">×{{ l.quantity }}</span>{% endif %}
+      {% if l.finish != 'nonfoil' %}<span class="finish-tag">{{ finishes[l.finish] }}</span>{% endif %}
+      {% if l.status == 'returned' %}<span class="returned-tag">Returned {{ l.returned_at|ago }}</span>{% endif %}
+    </div>
+    <div class="tile-body">
+      <h3 class="tile-name" title="{{ l.card_name }}">{{ l.card_name }}</h3>
+      <p class="tile-set" title="{{ l.set_name }}">
+        <img class="set-icon" src="https://svgs.scryfall.io/sets/{{ l.set_code }}.svg" alt="" onerror="this.remove()">
+        <span>{{ l.set_code|upper }} · #{{ l.collector_number }}</span>
+      </p>
+      <p class="tile-when">{{ l.created_at|ago|capitalize }}</p>
+    </div>
+    <div class="tile-actions">
+      {% if l.status == 'borrowed' %}
+        <form method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}">
+          <button class="btn btn-sm btn-ghost" title="Mark as returned">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ 'Got it back' if direction == 'lent' else 'Gave it back' }}
+          </button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('reopen', loan_id=l.id) }}">
+          <button class="btn btn-sm btn-ghost">Undo return</button>
+        </form>
+      {% endif %}
+      {% if l.created_by == g.user.id %}
+        <details class="menu menu-up">
+          <summary class="btn btn-sm btn-icon" aria-label="More actions">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15.5" cy="10" r="1.4"/></svg>
+          </summary>
+          <div class="menu-panel">
+            <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
+                  onsubmit="return confirm('Delete this entry? This can’t be undone.')">
+              <button class="menu-item danger">Delete entry</button>
+            </form>
+          </div>
+        </details>
+      {% endif %}
+    </div>
+  </article>
+{% endmacro %}
+
+{% macro panel(id, title, groups, role, direction, empty_title, empty_text) %}
+  <section class="panel" id="panel-{{ id }}" role="tabpanel" aria-labelledby="tab-{{ id }}">
+    <h2 class="panel-title">{{ title }}</h2>
+    {% for grp in groups %}
+      {% set name = person(grp.username, grp.first_name) %}
+      <div class="person-group" data-person="{{ name|lower }}">
+        <header class="person-head">
+          {{ avatar(grp.username, grp.first_name, grp.photo_url) }}
+          <div class="person-info">
+            <strong>{{ grp.first_name or name }}</strong>
+            {% if grp.first_name and grp.username %}<span class="muted">@{{ grp.username }}</span>{% endif %}
+          </div>
+          {% if grp.out %}<span class="pill pill-{{ id }}">{{ grp.out }} card{{ 's' if grp.out != 1 }} out</span>
+          {% else %}<span class="pill">All returned</span>{% endif %}
+          {% if grp.username %}
+            <a class="btn btn-sm btn-icon" href="{{ url_for('new_loan', direction=direction, other=grp.username) }}"
+               title="Add another card with {{ name }}" aria-label="Add another card with {{ name }}">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+            </a>
+          {% endif %}
+        </header>
+        <div class="card-grid">
+          {% for l in grp.loans %}{{ tile(l, name, direction) }}{% endfor %}
+        </div>
+      </div>
+    {% else %}
+      <div class="empty">
+        <div class="empty-art" aria-hidden="true"><span></span><span></span><span></span></div>
+        <h3>{{ empty_title }}</h3>
+        <p class="muted">{{ empty_text }}</p>
+        <a class="btn btn-primary" href="{{ url_for('new_loan', direction=direction) }}">Record a loan</a>
+      </div>
+    {% endfor %}
+    <p class="no-matches muted" hidden>No cards match your search.</p>
+  </section>
 {% endmacro %}
 
 {% block content %}
-<div class="filter">
-  {% if show_all %}
-    <a href="{{ url_for('index') }}">Show outstanding only</a>
-  {% else %}
-    <a href="{{ url_for('index', show='all') }}">Show returned too</a>
-  {% endif %}
+<div class="summary" role="tablist" aria-label="Ledger">
+  <button class="stat stat-lent" role="tab" id="tab-lent" aria-controls="panel-lent" aria-selected="true" data-tab="lent">
+    <span class="stat-label">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>Lent out
+    </span>
+    <span class="stat-value">{{ stats.lent_cards }}</span>
+    <span class="stat-sub">card{{ 's' if stats.lent_cards != 1 }} with {{ stats.lent_people }} {{ 'person' if stats.lent_people == 1 else 'people' }}</span>
+  </button>
+  <button class="stat stat-borrowed" role="tab" id="tab-borrowed" aria-controls="panel-borrowed" aria-selected="false" data-tab="borrowed">
+    <span class="stat-label">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>Borrowed
+    </span>
+    <span class="stat-value">{{ stats.borrowed_cards }}</span>
+    <span class="stat-sub">card{{ 's' if stats.borrowed_cards != 1 }} from {{ stats.borrowed_people }} {{ 'person' if stats.borrowed_people == 1 else 'people' }}</span>
+  </button>
 </div>
 
-<h2>Borrowed from others</h2>
-{{ loan_table(borrowed, 'lender') }}
+<div class="toolbar">
+  <label class="search">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>
+    <input type="search" id="filter" placeholder="Search cards, sets or people" aria-label="Search cards, sets or people">
+  </label>
+  <a class="toggle {{ 'on' if show_all }}" href="{{ url_for('index', show=None if show_all else 'all') }}" role="switch" aria-checked="{{ 'true' if show_all else 'false' }}">
+    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    Show returned
+  </a>
+</div>
 
-<h2>Lent to others</h2>
-{{ loan_table(lent, 'borrower') }}
+{{ panel('lent', 'Lent to others', lent_groups, 'borrower', 'lent',
+         'Nothing lent out' if not show_all else 'You haven’t lent any cards yet',
+         'Cards you lend to friends will show up here.') }}
+{{ panel('borrowed', 'Borrowed from others', borrowed_groups, 'lender', 'borrowed',
+         'Nothing borrowed' if not show_all else 'You haven’t borrowed any cards yet',
+         'Cards you borrow from friends will show up here.') }}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='ledger.js') }}"></script>
 {% endblock %}
