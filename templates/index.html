@@ -2,11 +2,11 @@
 {% import "_macros.html" as m with context %}
 
 {% macro panel(id, title, groups, role, direction, empty_title, empty_text) %}
-  <section class="panel" id="panel-{{ id }}" role="tabpanel" aria-labelledby="tab-{{ id }}">
+  <section class="panel" id="panel-{{ id }}" role="tabpanel" aria-labelledby="tab-{{ id }}" data-filter-scope>
     <h2 class="panel-title">{{ title }}</h2>
     {% for grp in groups %}
       {% set name = person(grp.username, grp.first_name) %}
-      <div class="person-group" data-person="{{ name|lower }}">
+      <div class="person-group" data-person="{{ name|lower }}" data-filter-group data-hide-empty>
         <header class="person-head">
           <a class="person-link" href="{{ url_for('person_page', person_id=grp.id) }}"
              title="{{ _("Everything with {name}", name=name) }}">

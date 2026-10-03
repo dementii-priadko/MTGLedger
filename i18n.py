@@ -66,6 +66,7 @@ UK = {
     "Lent out": "Позичено",
     "Borrowed": "Взято",
     "Search cards, sets or people": "Пошук карт, сетів або людей",
+    "Search cards or sets": "Пошук карт або сетів",
     "Show returned": "Показати повернуті",
     "Lent to others": "Позичено іншим",
     "Borrowed from others": "Взято в інших",

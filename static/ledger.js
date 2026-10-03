@@ -38,24 +38,28 @@
     e.currentTarget.href = e.currentTarget.href.split("#")[0] + location.hash;
   });
 
+  // Live search. A [data-filter-scope] (home tab panel, person-page section) holds [data-filter-group]s
+  // of tiles; groups marked data-hide-empty disappear when nothing in them matches, and a scope's
+  // .no-matches note shows when the search hides everything it had.
   const filter = document.getElementById("filter");
   filter?.addEventListener("input", () => {
     const q = filter.value.trim().toLowerCase();
-    for (const panel of document.querySelectorAll(".panel")) {
+    for (const scope of document.querySelectorAll("[data-filter-scope]")) {
+      const groups = scope.matches("[data-filter-group]") ? [scope] : scope.querySelectorAll("[data-filter-group]");
       let any = false;
-      for (const group of panel.querySelectorAll(".person-group")) {
-        const personMatch = group.dataset.person.includes(q);
+      for (const group of groups) {
+        const personMatch = !!q && (group.dataset.person || "").includes(q);
         let groupAny = false;
         for (const tile of group.querySelectorAll(".tile")) {
           const show = !q || personMatch || tile.dataset.search.includes(q);
           tile.hidden = !show;
           groupAny ||= show;
         }
-        group.hidden = !groupAny;
+        if (group.hasAttribute("data-hide-empty")) group.hidden = !groupAny;
         any ||= groupAny;
       }
-      const none = panel.querySelector(".no-matches");
-      if (none) none.hidden = any || !panel.querySelector(".person-group");
+      const none = scope.querySelector(".no-matches");
+      if (none) none.hidden = !q || any || !scope.querySelector(".tile");
     }
   });
 

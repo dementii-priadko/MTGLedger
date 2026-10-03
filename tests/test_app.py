@@ -470,3 +470,11 @@ def test_home_links_to_person_page(make_client, query):
     alice = make_client("alice")
     lend(alice)
     assert f'href="/people/{user_id(query, "bob")}"' in alice.get("/").get_data(as_text=True)
+
+
+def test_person_page_has_search(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    page = alice.get(f"/people/{user_id(query, 'bob')}").get_data(as_text=True)
+    assert 'id="filter"' in page and "Search cards or sets" in page
+    assert page.count("data-filter-scope") == 2 and 'class="no-matches' in page
