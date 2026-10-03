@@ -260,7 +260,7 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
   opacity: .55;
 }
 .tile:hover .finish-foil::after, .tile:hover .finish-etched::after { background-position: 0 100%; opacity: .65; }
-.preview-card.finish-foil::after, .preview-card.finish-etched::after { opacity: .4; animation: sheen 5s ease-in-out infinite alternate; }
+.pick-art.finish-foil::after, .pick-art.finish-etched::after { opacity: .45; animation: sheen 5s ease-in-out infinite alternate; }
 @keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 100%; } }
 
 .qty, .finish-tag, .returned-tag {
@@ -304,7 +304,7 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .back:hover { color: var(--text); text-decoration: none; }
 .page-title { font-family: var(--font-display); font-size: 30px; margin-bottom: 22px; letter-spacing: .01em; }
 
-.loan-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.loan-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
 .loan-steps { display: grid; gap: 16px; }
 .step { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; display: grid; gap: 16px; box-shadow: var(--shadow-sm); }
 .step-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
@@ -377,13 +377,44 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .stepper input:focus { box-shadow: none; }
 .stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
-.loan-preview { position: sticky; top: 80px; display: grid; gap: 14px; }
-.preview-card { width: 100%; box-shadow: var(--shadow-lg); }
-.preview-card img { position: absolute; inset: 0; }
-.preview-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; color: var(--muted); font-size: 14px; border: 2px dashed var(--border-strong); border-radius: inherit; background: var(--surface); }
-.preview-empty svg { width: 48px; height: 48px; opacity: .5; }
-.preview-empty svg rect { fill: none; stroke: currentColor; stroke-width: 1.5; }
-.preview-summary { font-size: 14px; line-height: 1.45; min-height: 42px; }
+/* card being picked */
+.pick { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 20px; align-items: start; padding: 14px; border-radius: 12px; background: var(--surface-2); }
+.pick-art { width: 100%; }
+.pick-art img { position: absolute; inset: 0; }
+.pick-controls { display: grid; gap: 16px; align-content: start; }
+.pick-name { font-weight: 600; }
+.pick-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
+.btn-add { height: 38px; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.btn-add:hover { background: var(--accent); color: var(--on-accent); }
+
+/* this loan */
+.cart {
+  position: sticky; top: 80px; display: grid; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px; box-shadow: var(--shadow);
+}
+.cart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cart-head h2 { font-size: 16px; font-weight: 600; }
+.cart-who { font-size: 14px; margin-top: -6px; }
+.cart-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: min(52vh, 480px); overflow: auto; }
+.cart-item { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 6px; border-radius: 10px; }
+.cart-item:hover { background: var(--surface-2); }
+.cart-item.just-added { animation: added 1.2s ease-out; }
+@keyframes added { from { background: var(--accent-soft); } }
+.cart-thumb { width: 34px; border-radius: 3px; box-shadow: var(--shadow-sm); }
+.cart-thumb img { position: absolute; inset: 0; }
+.cart-info { display: grid; min-width: 0; line-height: 1.3; }
+.cart-info strong { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cart-info .muted { font-size: 12px; }
+.cart-qty-controls { display: inline-flex; align-items: center; gap: 2px; }
+.cart-qty { min-width: 20px; text-align: center; font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cart-btn { width: 24px; height: 24px; display: inline-grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; }
+.cart-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.cart-btn:disabled { opacity: .35; cursor: default; }
+.cart-remove svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cart-remove:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+.cart-empty { display: grid; justify-items: center; gap: 10px; text-align: center; padding: 18px 8px; font-size: 14px; }
+.cart-empty .empty-art { transform: scale(.8); }
 
 /* ---------- login ---------- */
 .login-main { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
@@ -417,10 +448,10 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {
-  .loan-layout { grid-template-columns: 1fr; }
-  .loan-preview { position: static; grid-template-columns: 120px 1fr; align-items: center; order: -1; }
-  .loan-preview .btn-block { grid-column: 1 / -1; }
-  .loan-preview { order: 0; }
+  .loan-layout { grid-template-columns: 1fr; padding-bottom: 72px; }
+  .cart { position: static; }
+  /* Keep the submit button reachable while scrolling through editions. */
+  .cart #submit { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); width: auto; z-index: 15; box-shadow: var(--shadow-lg); }
 }
 @media (max-width: 600px) {
   .container { padding-top: 16px; }
@@ -436,6 +467,7 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
   .tile { width: calc(50% - 5px); }
   .step { padding: 16px; }
   .page-title { font-size: 24px; }
+  .pick { grid-template-columns: 96px minmax(0, 1fr); gap: 14px; }
   .printings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .printings-head { flex-wrap: wrap; }
   .printings-head input { width: 100%; }

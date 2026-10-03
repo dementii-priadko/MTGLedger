@@ -34,11 +34,11 @@ def clean_db():
 def fake_scryfall(monkeypatch):
     calls = []
 
-    def fake(scryfall_id):
-        calls.append(scryfall_id)
-        return PRINTINGS.get(scryfall_id)
+    def fake(scryfall_ids):
+        calls.append(list(scryfall_ids))
+        return {sid: PRINTINGS[sid] for sid in scryfall_ids if sid in PRINTINGS}
 
-    monkeypatch.setattr(ledger, "scryfall_card", fake)
+    monkeypatch.setattr(ledger, "scryfall_cards", fake)
     return calls
 
 

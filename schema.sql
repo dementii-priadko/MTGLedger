@@ -44,3 +44,7 @@ CREATE TABLE IF NOT EXISTS loans (
 
 CREATE INDEX IF NOT EXISTS loans_lender   ON loans (lender_id, status);
 CREATE INDEX IF NOT EXISTS loans_borrower ON loans (borrower_id, status);
+
+-- Cards recorded together as one loan share a batch id (added after the initial schema).
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS batch_id UUID;
+CREATE INDEX IF NOT EXISTS loans_batch ON loans (batch_id);

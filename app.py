@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from functools import wraps
 from pathlib import Path
 
@@ -32,6 +33,7 @@ AUTH_MAX_AGE = 24 * 3600  # reject Telegram auth payloads older than this
 
 FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+MAX_CARDS_PER_LOAN = 50
 
 app = Flask(__name__)
 # Behind a tunnel / reverse proxy: trust X-Forwarded-Proto/Host so external URLs
@@ -208,19 +210,32 @@ class ScryfallUnavailable(Exception):
     pass
 
 
-def scryfall_card(scryfall_id):
-    """Fetch one printing from Scryfall; None if it doesn't exist."""
-    url = "https://api.scryfall.com/cards/" + urllib.parse.quote(scryfall_id)
-    req = urllib.request.Request(url, headers={"User-Agent": "tcg-ledger/0.1", "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=SSL_CONTEXT) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as e:
-        if e.code in (400, 404):
-            return None
-        raise ScryfallUnavailable from e
-    except (urllib.error.URLError, TimeoutError, ValueError) as e:
-        raise ScryfallUnavailable from e
+def scryfall_cards(scryfall_ids):
+    """Fetch printings by Scryfall id via the collection endpoint; returns {id: card} for those found."""
+    ids = []
+    for sid in dict.fromkeys(scryfall_ids):
+        try:
+            parsed = uuid.UUID(sid)
+        except ValueError:
+            continue  # not a Scryfall id at all: treat as not found
+        if parsed.version == 4:  # Scryfall ids are v4; it rejects other UUIDs with a 400
+            ids.append(str(parsed))
+    found = {}
+    for i in range(0, len(ids), 75):  # API limit per request
+        body = json.dumps({"identifiers": [{"id": sid} for sid in ids[i:i + 75]]}).encode()
+        req = urllib.request.Request(
+            "https://api.scryfall.com/cards/collection", data=body, method="POST",
+            headers={"User-Agent": "tcg-ledger/0.1", "Accept": "application/json", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
+                found.update((card["id"], card) for card in json.load(resp)["data"])
+        except urllib.error.HTTPError as e:
+            if e.code != 400:  # 400 = malformed identifiers; leave them unfound
+                raise ScryfallUnavailable from e
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError) as e:
+            raise ScryfallUnavailable from e
+    return found
 
 
 def card_image(card):
@@ -228,27 +243,66 @@ def card_image(card):
     return uris.get("normal") or uris.get("small")
 
 
-def get_or_create_mtg_card(scryfall_id, finish):
+def get_or_create_mtg_cards(items):
+    """Map [(scryfall_id, finish), ...] to cards.id values, creating missing rows from Scryfall data."""
     db = get_db()
-    row = db.execute(
-        "SELECT id FROM cards WHERE game = 'mtg' AND external_id = %s AND finish = %s", (scryfall_id, finish)
-    ).fetchone()
-    if row:
-        return row["id"]
-    try:
-        card = scryfall_card(scryfall_id)
-    except ScryfallUnavailable:
-        raise ValueError("Couldn't reach Scryfall, try again in a moment.")
-    if not card or card.get("object") != "card":
-        raise ValueError("Card not found on Scryfall.")
-    if finish not in card.get("finishes", []):
-        raise ValueError(f"This printing doesn't come in {FINISHES[finish].lower()}.")
-    return db.execute(
-        """INSERT INTO cards (game, external_id, name, set_code, set_name, collector_number, image_url, finish)
-           VALUES ('mtg', %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-        (card["id"], card["name"], card.get("set"), card.get("set_name"),
-         card.get("collector_number"), card_image(card), finish),
-    ).fetchone()["id"]
+    ids = {}
+    for sid, finish in items:
+        row = db.execute(
+            "SELECT id FROM cards WHERE game = 'mtg' AND external_id = %s AND finish = %s", (sid, finish)
+        ).fetchone()
+        if row:
+            ids[sid, finish] = row["id"]
+
+    missing = [item for item in items if item not in ids]
+    if missing:
+        try:
+            fetched = scryfall_cards([sid for sid, _ in missing])
+        except ScryfallUnavailable:
+            raise ValueError("Couldn't reach Scryfall, try again in a moment.")
+        for sid, finish in missing:
+            card = fetched.get(sid)
+            if not card or card.get("object") != "card":
+                raise ValueError("A card wasn't found on Scryfall. Remove it and pick it again.")
+            if finish not in card.get("finishes", []):
+                raise ValueError(f"{card['name']} ({card.get('set', '').upper()}) doesn't come in "
+                                 f"{FINISHES[finish].lower()}.")
+            ids[sid, finish] = db.execute(
+                """INSERT INTO cards (game, external_id, name, set_code, set_name, collector_number, image_url, finish)
+                   VALUES ('mtg', %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (game, external_id, finish) DO UPDATE SET name = EXCLUDED.name
+                   RETURNING id""",
+                (sid, card["name"], card.get("set"), card.get("set_name"),
+                 card.get("collector_number"), card_image(card), finish),
+            ).fetchone()["id"]
+    return [ids[item] for item in items]
+
+
+def parse_cart(form):
+    """Read the card lines of a new-loan form; returns ([(scryfall_id, finish, qty), ...], error)."""
+    ids, finishes, quantities = form.getlist("scryfall_id"), form.getlist("finish"), form.getlist("quantity")
+    if not (len(ids) == len(finishes) == len(quantities)):
+        return [], "The card list was malformed, please try again."
+    lines = {}
+    for sid, finish, qty in zip(ids, finishes, quantities):
+        sid = sid.strip()
+        if not sid:
+            continue
+        if finish not in FINISHES:
+            return [], "Invalid finish."
+        try:
+            qty = int(qty)
+        except ValueError:
+            qty = 0
+        if not 1 <= qty <= 99:
+            return [], "Quantity must be between 1 and 99."
+        # The same printing+finish added twice becomes one line.
+        lines[sid, finish] = min(99, lines.get((sid, finish), 0) + qty)
+    if not lines:
+        return [], "Add at least one card."
+    if len(lines) > MAX_CARDS_PER_LOAN:
+        return [], f"A loan can have at most {MAX_CARDS_PER_LOAN} different cards."
+    return [(sid, finish, qty) for (sid, finish), qty in lines.items()], None
 
 
 # --- ledger -----------------------------------------------------------------
@@ -352,30 +406,18 @@ def new_loan():
         form = request.form
         direction = form.get("direction")
         other = form.get("other", "").strip().lstrip("@")
-        scryfall_id = form.get("scryfall_id", "").strip()
-        finish = form.get("finish", "nonfoil")
-        try:
-            quantity = int(form.get("quantity", "1"))
-        except ValueError:
-            quantity = 0
+        lines, error = parse_cart(form)
 
-        error = None
         if direction not in ("lent", "borrowed"):
-            error = "Choose whether you lent or borrowed the card."
+            error = "Choose whether you lent or borrowed the cards."
         elif not USERNAME_RE.match(other):
             error = "Enter the other person's Telegram @username."
         elif g.user["username"] and other.lower() == g.user["username"].lower():
             error = "You can't lend cards to yourself."
-        elif not scryfall_id:
-            error = "Pick a card and edition."
-        elif finish not in FINISHES:
-            error = "Invalid finish."
-        elif not 1 <= quantity <= 99:
-            error = "Quantity must be between 1 and 99."
 
         if error is None:
             try:
-                card_id = get_or_create_mtg_card(scryfall_id, finish)
+                card_ids = get_or_create_mtg_cards([(sid, finish) for sid, finish, _ in lines])
             except ValueError as e:
                 error = str(e)
 
@@ -383,12 +425,17 @@ def new_loan():
             other_id = get_or_create_user_by_username(other)
             me = g.user["id"]
             lender, borrower = (me, other_id) if direction == "lent" else (other_id, me)
-            db.execute(
-                "INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by) VALUES (%s, %s, %s, %s, %s)",
-                (card_id, lender, borrower, quantity, me),
-            )
+            batch_id = uuid.uuid4()
+            with db.cursor() as cur:
+                cur.executemany(
+                    """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by, batch_id)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    [(card_id, lender, borrower, qty, me, batch_id)
+                     for card_id, (_, _, qty) in zip(card_ids, lines)],
+                )
             db.commit()
-            flash("Loan recorded.", "ok")
+            total = sum(qty for _, _, qty in lines)
+            flash(f"Loan recorded: {total} card{'s' if total != 1 else ''}.", "ok")
             return redirect(url_for("index", _anchor=direction))
         db.rollback()
         flash(error, "error")

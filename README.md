@@ -34,7 +34,8 @@ Other env vars: `DATABASE_URL` (default `postgresql://ledger:ledger@localhost:54
 
 - `users`: Telegram accounts. Recording a loan with an `@username` who hasn't logged in yet creates a placeholder, which they claim on first login.
 - `cards`: one printing (Scryfall id) in one finish (`nonfoil` / `foil` / `etched`), tagged with `game` so other TCGs can be added.
-- `loans`: the ledger. `card_id`, `lender_id`, `borrower_id`, `quantity`, `created_at`, `status` (`borrowed` / `returned`), `returned_at`.
+- `loans`: the ledger, one row per card. `card_id`, `lender_id`, `borrower_id`, `quantity`, `created_at`, `status` (`borrowed` / `returned`), `returned_at`.
+  Cards recorded together in one loan share a `batch_id`; each card can still be returned on its own.
 
 Either party can mark a loan returned (or undo). Only whoever created the entry can delete it.
 

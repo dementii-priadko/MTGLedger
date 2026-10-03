@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import time
 
+from werkzeug.datastructures import MultiDict
+
 import app as ledger
 
 
@@ -96,7 +98,7 @@ def test_card_row_reused(make_client, query, fake_scryfall):
     lend(alice)
     lend(alice, other="@carol")
     assert query("SELECT count(*) FROM cards") == [(1,)]
-    assert fake_scryfall == ["bolt-m10"]
+    assert fake_scryfall == [["bolt-m10"]]
 
 
 def test_same_printing_different_finish_is_different_card(make_client, query):
@@ -113,13 +115,13 @@ def test_rejects_unavailable_finish(make_client, query):
 
 
 def test_rejects_unknown_card(make_client):
-    assert b"not found" in lend(make_client("alice"), card="nope").data
+    assert b"found on Scryfall" in lend(make_client("alice"), card="nope").data
 
 
 def test_scryfall_down(make_client, monkeypatch):
-    def down(_id):
+    def down(_ids):
         raise ledger.ScryfallUnavailable
-    monkeypatch.setattr(ledger, "scryfall_card", down)
+    monkeypatch.setattr(ledger, "scryfall_cards", down)
     assert b"reach Scryfall" in lend(make_client("alice")).data
 
 
@@ -212,3 +214,57 @@ def test_new_loan_redirects_to_matching_tab(make_client):
     resp = make_client("alice").post("/loans/new", data={
         "direction": "borrowed", "other": "@bob", "scryfall_id": "bolt-m10", "finish": "nonfoil", "quantity": "1"})
     assert resp.headers["Location"] == "/#borrowed"
+
+
+# --- multi-card loans -------------------------------------------------------
+
+def lend_many(client, cards, other="@bob", direction="lent"):
+    """cards: [(scryfall_id, finish, quantity), ...]"""
+    data = [("direction", direction), ("other", other)]
+    for sid, finish, qty in cards:
+        data += [("scryfall_id", sid), ("finish", finish), ("quantity", str(qty))]
+    return client.post("/loans/new", data=MultiDict(data), follow_redirects=True)
+
+
+def test_multi_card_loan_creates_one_row_per_card_with_shared_batch(make_client, query, fake_scryfall):
+    resp = lend_many(make_client("alice"), [("bolt-m10", "foil", 2), ("sol-ring-cmm", "etched", 1)])
+    assert b"Loan recorded: 3 cards" in resp.data
+    rows = query("""SELECT c.name, c.finish, l.quantity, l.batch_id FROM loans l JOIN cards c ON c.id = l.card_id
+                    ORDER BY l.id""")
+    assert [r[:3] for r in rows] == [("Lightning Bolt", "foil", 2), ("Sol Ring", "etched", 1)]
+    assert rows[0][3] is not None and rows[0][3] == rows[1][3]
+    assert fake_scryfall == [["bolt-m10", "sol-ring-cmm"]]  # one batched lookup
+
+
+def test_separate_loans_get_different_batches(make_client, query):
+    alice = make_client("alice")
+    lend(alice)
+    lend(alice, card="sol-ring-cmm")
+    assert query("SELECT count(DISTINCT batch_id) FROM loans") == [(2,)]
+
+
+def test_duplicate_lines_are_merged(make_client, query):
+    lend_many(make_client("alice"), [("bolt-m10", "nonfoil", 2), ("bolt-m10", "nonfoil", 3), ("bolt-m10", "foil", 1)])
+    assert query("""SELECT c.finish, l.quantity FROM loans l JOIN cards c ON c.id = l.card_id
+                    ORDER BY c.finish""") == [("foil", 1), ("nonfoil", 5)]
+
+
+def test_multi_card_loan_is_all_or_nothing(make_client, query):
+    resp = lend_many(make_client("alice"), [("bolt-m10", "nonfoil", 1), ("bolt-m10", "etched", 1)])
+    assert b"Lightning Bolt (M10) doesn" in resp.data
+    assert query("SELECT count(*) FROM loans") == [(0,)]
+    assert query("SELECT count(*) FROM cards") == [(0,)]
+
+
+def test_loan_needs_at_least_one_card(make_client):
+    assert b"Add at least one card" in lend_many(make_client("alice"), []).data
+
+
+def test_loan_card_limit(make_client):
+    cards = [(f"id-{i}", "nonfoil", 1) for i in range(ledger.MAX_CARDS_PER_LOAN + 1)]
+    assert b"at most" in lend_many(make_client("alice"), cards).data
+
+
+def test_scryfall_cards_skips_non_uuid_ids(monkeypatch):
+    monkeypatch.setattr(ledger.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    assert ledger.scryfall_cards(["not-a-uuid"]) == {}

@@ -12,9 +12,9 @@
       <h2 class="step-title"><span class="step-num">1</span>Who?</h2>
       <div class="segmented" role="radiogroup" aria-label="Direction">
         <label><input type="radio" name="direction" value="lent" {{ 'checked' if prefill.get('direction', 'lent') != 'borrowed' }}>
-          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>I lent a card</span></label>
+          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15L15 5M8 5h7v7"/></svg>I lent cards</span></label>
         <label><input type="radio" name="direction" value="borrowed" {{ 'checked' if prefill.get('direction') == 'borrowed' }}>
-          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>I borrowed a card</span></label>
+          <span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15 5L5 15M12 15H5V8"/></svg>I borrowed cards</span></label>
       </div>
 
       <label class="field">
@@ -38,8 +38,8 @@
       {% endif %}
     </section>
 
-    <section class="step">
-      <h2 class="step-title"><span class="step-num">2</span>Which card?</h2>
+    <section class="step" id="picker">
+      <h2 class="step-title"><span class="step-num">2</span>Add cards</h2>
       <div class="field combo">
         <label class="field-label" for="card-name">Card name <span class="muted">· Magic: The Gathering</span></label>
         <div class="search">
@@ -50,48 +50,59 @@
         <ul class="suggestions" id="card-suggestions" role="listbox" hidden></ul>
       </div>
 
+      <div class="pick" id="pick" hidden>
+        <div class="pick-art art" id="pick-art"><img id="pick-img" alt=""></div>
+        <div class="pick-controls">
+          <p class="pick-name" id="pick-name"></p>
+          <div class="field">
+            <span class="field-label">Finish</span>
+            <div class="pills" role="radiogroup" aria-label="Finish">
+              {% for value, label in finishes.items() %}
+                <label class="pill-option"><input type="radio" name="pick_finish" value="{{ value }}" {{ 'checked' if loop.first }}><span>{{ label }}</span></label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="pick-row">
+            <div class="field">
+              <span class="field-label" id="qty-label">Quantity</span>
+              <div class="stepper" aria-labelledby="qty-label">
+                <button type="button" data-step="-1" aria-label="Decrease">−</button>
+                <input type="number" id="pick-qty" value="1" min="1" max="99" inputmode="numeric" aria-labelledby="qty-label">
+                <button type="button" data-step="1" aria-label="Increase">+</button>
+              </div>
+            </div>
+            <button type="button" class="btn btn-add" id="add-card">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>Add to loan
+            </button>
+          </div>
+        </div>
+      </div>
       <div class="printings-wrap" id="printings-wrap" hidden>
         <div class="printings-head">
-          <span class="field-label">Edition <span class="muted" id="printing-count"></span></span>
+          <span class="field-label">Change edition <span class="muted" id="printing-count"></span></span>
           <input type="search" id="printing-filter" class="input-sm" placeholder="Filter sets" hidden>
         </div>
         <div class="printings" id="printings" role="radiogroup" aria-label="Edition"></div>
       </div>
       <p class="hint" id="printings-status" hidden></p>
-    </section>
 
-    <section class="step">
-      <h2 class="step-title"><span class="step-num">3</span>Details</h2>
-      <div class="details-row">
-        <div class="field">
-          <span class="field-label">Finish</span>
-          <div class="pills" role="radiogroup" aria-label="Finish">
-            {% for value, label in finishes.items() %}
-              <label class="pill-option"><input type="radio" name="finish" value="{{ value }}" {{ 'checked' if loop.first }}><span>{{ label }}</span></label>
-            {% endfor %}
-          </div>
-        </div>
-        <div class="field">
-          <span class="field-label" id="qty-label">Quantity</span>
-          <div class="stepper" aria-labelledby="qty-label">
-            <button type="button" data-step="-1" aria-label="Decrease">−</button>
-            <input type="number" name="quantity" id="quantity" value="{{ prefill.get('quantity', 1) }}" min="1" max="99" inputmode="numeric" aria-labelledby="qty-label">
-            <button type="button" data-step="1" aria-label="Increase">+</button>
-          </div>
-        </div>
-      </div>
     </section>
   </div>
 
-  <aside class="loan-preview">
-    <div class="preview-card art" id="preview-art">
-      <div class="preview-empty" id="preview-empty">
-        <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="17" height="24" rx="3" transform="rotate(12 17 15)"/><rect x="5" y="5" width="17" height="24" rx="3"/></svg>
-        <span>Pick a card to preview it</span>
-      </div>
-      <img id="preview" alt="" hidden>
+  <aside class="cart" aria-labelledby="cart-title">
+    <div class="cart-head">
+      <h2 id="cart-title">This loan</h2>
+      <span class="pill" id="cart-count">0 cards</span>
     </div>
-    <p class="preview-summary" id="summary">&nbsp;</p>
+    <p class="cart-who muted" id="cart-who"></p>
+    <ul class="cart-list" id="cart-list"></ul>
+    <div class="cart-empty" id="cart-empty">
+      <div class="empty-art" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p class="muted">Search for a card, pick its edition and press <strong>Add to loan</strong>. Add as many as you like.</p>
+    </div>
+    <p class="field-error" id="cart-error" hidden></p>
+    <div id="cart-inputs"></div>
+    <input type="hidden" name="cart_json" id="cart-json" value="{{ prefill.get('cart_json', '') }}">
     <button type="submit" class="btn btn-primary btn-lg btn-block" id="submit">Record loan</button>
   </aside>
 </form>

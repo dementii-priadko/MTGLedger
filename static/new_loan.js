@@ -1,9 +1,10 @@
-// New-loan form: card search, edition grid, finish/quantity, live preview.
+// New-loan form: card search, edition grid, finish/quantity, and a list of cards in this loan.
 // Card data comes from the Scryfall API (https://scryfall.com/docs/api).
 (() => {
   const API = "https://api.scryfall.com";
   const FINISH_LABEL = { nonfoil: "Non-foil", foil: "Foil", etched: "Etched foil" };
   const USERNAME_RE = /^[A-Za-z0-9_]{3,32}$/;
+  const MAX_LINES = 50;
 
   const $ = (id) => document.getElementById(id);
   const form = $("loan-form");
@@ -15,45 +16,53 @@
   const printingFilter = $("printing-filter");
   const printingCount = $("printing-count");
   const printingsStatus = $("printings-status");
-  const quantity = $("quantity");
-  const preview = $("preview");
-  const previewArt = $("preview-art");
-  const previewEmpty = $("preview-empty");
-  const summary = $("summary");
+  const pick = $("pick");
+  const pickArt = $("pick-art");
+  const pickImg = $("pick-img");
+  const pickQty = $("pick-qty");
+  const cartList = $("cart-list");
+  const cartError = $("cart-error");
 
   let printings = [];
-  let selected = null;
+  let selected = null;     // printing currently being picked (not yet in the cart)
   let loadedName = null;
   let activeIndex = -1;
   let autocompleteTimer;
+  let cart = [];           // [{id, name, set, number, image, finish, qty}]
 
   const image = (card, size) => {
     const uris = card.image_uris || (card.card_faces && card.card_faces[0].image_uris) || {};
     return uris[size] || uris.normal;
   };
   const direction = () => form.querySelector("[name=direction]:checked").value;
-  const finish = () => form.querySelector("[name=finish]:checked")?.value;
+  const pickFinish = () => form.querySelector("[name=pick_finish]:checked")?.value;
+  const el = (tag, props = {}, ...children) => {
+    const node = Object.assign(document.createElement(tag), props);
+    node.append(...children);
+    return node;
+  };
 
   // --- who --------------------------------------------------------------------
 
-  function syncDirection() {
+  function syncWho() {
     $("other-label").textContent = direction() === "lent" ? "Lent to" : "Borrowed from";
-    updateSummary();
+    const who = USERNAME_RE.test(other.value) ? `@${other.value}` : "…";
+    $("cart-who").textContent = (direction() === "lent" ? "Lending to " : "Borrowing from ") + who;
   }
-  form.querySelectorAll("[name=direction]").forEach((r) => r.addEventListener("change", syncDirection));
+  form.querySelectorAll("[name=direction]").forEach((r) => r.addEventListener("change", syncWho));
 
   other.addEventListener("input", () => {
     other.value = other.value.replace(/^@+/, "");
     clearError(other);
     highlightChip();
-    updateSummary();
+    syncWho();
   });
   document.querySelectorAll(".chip").forEach((chip) =>
     chip.addEventListener("click", () => {
       other.value = chip.dataset.username;
       clearError(other);
       highlightChip();
-      updateSummary();
+      syncWho();
     })
   );
   function highlightChip() {
@@ -65,7 +74,6 @@
   // --- card search --------------------------------------------------------------
 
   nameInput.addEventListener("input", () => {
-    clearError(nameInput);
     clearTimeout(autocompleteTimer);
     const q = nameInput.value.trim();
     if (q.length < 2) return closeSuggestions();
@@ -83,10 +91,7 @@
     activeIndex = -1;
     suggestions.replaceChildren(
       ...names.map((name, i) => {
-        const li = document.createElement("li");
-        li.role = "option";
-        li.id = `sugg-${i}`;
-        li.textContent = name;
+        const li = el("li", { role: "option", id: `sugg-${i}`, textContent: name });
         li.addEventListener("mousedown", (e) => { e.preventDefault(); choose(name); });
         return li;
       })
@@ -134,11 +139,10 @@
   async function loadPrintings(name) {
     if (name === loadedName) return;
     loadedName = name;
-    selected = null;
     printings = [];
+    setSelected(null);
     printingsWrap.hidden = true;
     setStatus("Loading editions…");
-    updatePreview();
 
     let url = `${API}/cards/search?unique=prints&order=released&dir=desc&q=${encodeURIComponent(`!"${name}" game:paper`)}`;
     try {
@@ -167,108 +171,190 @@
     printingFilter.value = "";
     printingsEl.replaceChildren(
       ...printings.map((p, i) => {
-        const label = document.createElement("label");
-        label.className = "printing";
+        const label = el("label", {
+          className: "printing",
+          title: `${p.set_name} (${p.set.toUpperCase()} #${p.collector_number})`,
+        });
         label.dataset.search = `${p.set_name} ${p.set} ${p.released_at.slice(0, 4)} ${p.collector_number}`.toLowerCase();
-        label.title = `${p.set_name} (${p.set.toUpperCase()} #${p.collector_number})`;
-        label.innerHTML = `
-          <input type="radio" name="scryfall_id">
-          <span class="printing-art"><img loading="lazy" alt=""></span>
-          <span class="printing-set"></span>
-          <span class="printing-meta"></span>`;
-        const input = label.querySelector("input");
-        input.value = p.id;
-        input.addEventListener("change", () => selectPrinting(i));
-        const img = label.querySelector("img");
+        const input = el("input", { type: "radio", name: "pick_printing", value: p.id });
+        input.addEventListener("change", () => setSelected(printings[i]));
+        const art = el("span", { className: "printing-art" });
         const src = image(p, "small");
-        if (src) img.src = src; else img.remove();
-        label.querySelector(".printing-set").textContent = p.set_name;
-        label.querySelector(".printing-meta").textContent =
-          `${p.set.toUpperCase()} #${p.collector_number} · ${p.released_at.slice(0, 4)}${p.finishes.includes("nonfoil") ? "" : " · foil only"}`;
+        if (src) art.append(el("img", { src, alt: "", loading: "lazy" }));
+        label.append(
+          input,
+          art,
+          el("span", { className: "printing-set", textContent: p.set_name }),
+          el("span", {
+            className: "printing-meta",
+            textContent: `${p.set.toUpperCase()} #${p.collector_number} · ${p.released_at.slice(0, 4)}` +
+              (p.finishes.includes("nonfoil") ? "" : " · foil only"),
+          })
+        );
         return label;
       })
     );
     printingsWrap.hidden = false;
     printingsEl.querySelector("input").checked = true;
-    selectPrinting(0);
+    setSelected(printings[0]);
   }
 
   printingFilter.addEventListener("input", () => {
     const q = printingFilter.value.trim().toLowerCase();
-    for (const el of printingsEl.children) el.hidden = q && !el.dataset.search.includes(q);
+    for (const node of printingsEl.children) node.hidden = q && !node.dataset.search.includes(q);
   });
 
-  function selectPrinting(i) {
-    selected = printings[i];
-    clearError(nameInput);
+  function setSelected(p) {
+    selected = p;
+    pick.hidden = !p;
+    if (!p) return;
     // Only offer finishes this printing actually exists in.
-    const radios = [...form.querySelectorAll("[name=finish]")];
+    const radios = [...form.querySelectorAll("[name=pick_finish]")];
     for (const r of radios) {
-      const ok = selected.finishes.includes(r.value);
+      const ok = p.finishes.includes(r.value);
       r.disabled = !ok;
       r.closest(".pill-option").hidden = !ok;
     }
-    if (!finish() || form.querySelector("[name=finish]:checked").disabled) {
+    if (!pickFinish() || form.querySelector("[name=pick_finish]:checked").disabled) {
       radios.find((r) => !r.disabled).checked = true;
     }
-    updatePreview();
+    $("pick-name").textContent = `${p.name} · ${p.set.toUpperCase()} #${p.collector_number}`;
+    pickImg.src = image(p, "normal");
+    pickImg.alt = p.name;
+    syncPickArt();
   }
 
-  form.querySelectorAll("[name=finish]").forEach((r) => r.addEventListener("change", updatePreview));
+  function syncPickArt() {
+    pickArt.className = `pick-art art finish-${pickFinish() || "nonfoil"}`;
+  }
+  form.querySelectorAll("[name=pick_finish]").forEach((r) => r.addEventListener("change", syncPickArt));
 
-  // --- quantity ---------------------------------------------------------------------
-
+  const clampQty = (n) => Math.min(99, Math.max(1, n || 1));
   document.querySelectorAll(".stepper [data-step]").forEach((b) =>
     b.addEventListener("click", () => {
-      quantity.value = Math.min(99, Math.max(1, (parseInt(quantity.value, 10) || 1) + Number(b.dataset.step)));
-      updateSummary();
+      pickQty.value = clampQty((parseInt(pickQty.value, 10) || 1) + Number(b.dataset.step));
     })
   );
-  quantity.addEventListener("input", updateSummary);
 
-  // --- preview ----------------------------------------------------------------------
+  function resetPicker() {
+    loadedName = null;
+    printings = [];
+    setSelected(null);
+    printingsWrap.hidden = true;
+    printingsEl.replaceChildren();
+    setStatus(null);
+    nameInput.value = "";
+    pickQty.value = 1;
+    form.querySelector("[name=pick_finish][value=nonfoil]").checked = true;
+  }
 
-  function updatePreview() {
-    previewArt.className = `preview-card art finish-${selected ? finish() : "nonfoil"}`;
-    if (selected) {
-      preview.src = image(selected, "normal");
-      preview.alt = selected.name;
+  // --- the loan's card list -------------------------------------------------------
+
+  function addSelected() {
+    if (!selected) return false;
+    const line = {
+      id: selected.id,
+      name: selected.name,
+      set: selected.set.toUpperCase(),
+      number: selected.collector_number,
+      image: image(selected, "small"),
+      finish: pickFinish(),
+      qty: clampQty(parseInt(pickQty.value, 10)),
+    };
+    const same = cart.find((c) => c.id === line.id && c.finish === line.finish);
+    if (same) {
+      same.qty = clampQty(same.qty + line.qty);
+    } else {
+      if (cart.length >= MAX_LINES) {
+        showCartError(`A loan can have at most ${MAX_LINES} different cards.`);
+        return false;
+      }
+      cart.push(line);
     }
-    preview.hidden = !selected;
-    previewEmpty.hidden = !!selected;
-    updateSummary();
+    renderCart(same || line);
+    resetPicker();
+    return true;
   }
 
-  function updateSummary() {
-    if (!selected) { summary.innerHTML = "&nbsp;"; return; }
-    const qty = parseInt(quantity.value, 10) || 1;
-    const who = other.value ? `@${other.value}` : "someone";
-    const what = `${qty > 1 ? qty + "× " : ""}${selected.name}`;
-    const detail = `${FINISH_LABEL[finish()]} · ${selected.set.toUpperCase()} #${selected.collector_number}`;
-    summary.replaceChildren(
-      direction() === "lent" ? "You lent " : "You borrowed ",
-      Object.assign(document.createElement("strong"), { textContent: what }),
-      direction() === "lent" ? " to " : " from ",
-      Object.assign(document.createElement("strong"), { textContent: who }),
-      Object.assign(document.createElement("span"), { className: "muted", textContent: ` (${detail})` })
+  $("add-card").addEventListener("click", () => {
+    if (addSelected()) nameInput.focus();
+  });
+
+  function renderCart(highlight) {
+    cartError.hidden = true;
+    cartList.replaceChildren(
+      ...cart.map((line, i) => {
+        const minus = el("button", { type: "button", className: "cart-btn", textContent: "−", ariaLabel: `One less ${line.name}` });
+        const plus = el("button", { type: "button", className: "cart-btn", textContent: "+", ariaLabel: `One more ${line.name}` });
+        const remove = el("button", { type: "button", className: "cart-btn cart-remove", ariaLabel: `Remove ${line.name}`, title: "Remove" });
+        remove.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>';
+        minus.disabled = line.qty <= 1;
+        minus.addEventListener("click", () => { line.qty = clampQty(line.qty - 1); renderCart(); });
+        plus.addEventListener("click", () => { line.qty = clampQty(line.qty + 1); renderCart(); });
+        remove.addEventListener("click", () => { cart.splice(i, 1); renderCart(); });
+
+        const thumb = el("span", { className: `cart-thumb art finish-${line.finish}` });
+        if (line.image) thumb.append(el("img", { src: line.image, alt: "" }));
+        const detail = `${line.set} #${line.number}` + (line.finish === "nonfoil" ? "" : ` · ${FINISH_LABEL[line.finish]}`);
+        const li = el(
+          "li",
+          { className: "cart-item" },
+          thumb,
+          el("span", { className: "cart-info" },
+            el("strong", { textContent: line.name, title: line.name }),
+            el("span", { className: "muted", textContent: detail })),
+          el("span", { className: "cart-qty-controls" },
+            minus, el("span", { className: "cart-qty", textContent: line.qty }), plus),
+          remove
+        );
+        if (line === highlight) li.classList.add("just-added");
+        return li;
+      })
     );
+    const total = cart.reduce((n, c) => n + c.qty, 0);
+    $("cart-count").textContent = `${total} card${total === 1 ? "" : "s"}`;
+    $("cart-empty").hidden = cart.length > 0;
+    $("submit").textContent = total > 1 ? `Record loan · ${total} cards` : "Record loan";
+
+    // Hidden fields the server reads (one triple per line), plus display data to restore the list after an error.
+    $("cart-inputs").replaceChildren(
+      ...cart.flatMap((c) => [
+        el("input", { type: "hidden", name: "scryfall_id", value: c.id }),
+        el("input", { type: "hidden", name: "finish", value: c.finish }),
+        el("input", { type: "hidden", name: "quantity", value: c.qty }),
+      ])
+    );
+    $("cart-json").value = JSON.stringify(cart);
   }
 
-  // --- validation -------------------------------------------------------------------
+  function restoreCart() {
+    try {
+      const saved = JSON.parse($("cart-json").value || "[]");
+      if (!Array.isArray(saved)) return;
+      cart = saved
+        .filter((c) => c && typeof c.id === "string" && FINISH_LABEL[c.finish])
+        .slice(0, MAX_LINES)
+        .map((c) => ({
+          id: c.id, name: String(c.name || "Unknown card"), set: String(c.set || ""), number: String(c.number || ""),
+          image: typeof c.image === "string" && c.image.startsWith("https://") ? c.image : null,
+          finish: c.finish, qty: clampQty(parseInt(c.qty, 10)),
+        }));
+    } catch {
+      cart = [];
+    }
+  }
+
+  // --- validation & submit ------------------------------------------------------
 
   function setStatus(text) {
     printingsStatus.hidden = !text;
     printingsStatus.textContent = text || "";
   }
-
   function showError(input, message) {
     const field = input.closest(".field");
     field.classList.add("invalid");
     let msg = field.querySelector(".field-error");
-    if (!msg) {
-      msg = Object.assign(document.createElement("p"), { className: "field-error" });
-      field.append(msg);
-    }
+    if (!msg) field.append((msg = el("p", { className: "field-error" })));
     msg.textContent = message;
   }
   function clearError(input) {
@@ -276,15 +362,21 @@
     field.classList.remove("invalid");
     field.querySelector(".field-error")?.remove();
   }
+  function showCartError(message) {
+    cartError.textContent = message;
+    cartError.hidden = false;
+  }
 
   form.addEventListener("submit", (e) => {
+    // A card that's picked but not yet added counts too, so single-card loans need no extra click.
+    if (selected) addSelected();
     let firstBad = null;
     if (!USERNAME_RE.test(other.value)) {
       showError(other, "Enter their Telegram username (letters, numbers, underscores).");
       firstBad ||= other;
     }
-    if (!selected) {
-      showError(nameInput, "Search for a card and pick an edition.");
+    if (!cart.length) {
+      showCartError("Add at least one card to the loan.");
       firstBad ||= nameInput;
     }
     if (firstBad) {
@@ -299,9 +391,11 @@
   // Re-enable the button if the page is restored from the back/forward cache.
   window.addEventListener("pageshow", () => {
     $("submit").disabled = false;
-    $("submit").textContent = "Record loan";
+    renderCart();
   });
 
-  syncDirection();
+  restoreCart();
+  renderCart();
+  syncWho();
   highlightChip();
 })();
