@@ -283,9 +283,40 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .tile-when { font-size: 12.5px; color: var(--muted); }
 .tile-actions { display: flex; align-items: center; gap: 4px; margin-top: auto; }
 .tile-actions form { margin: 0; }
-.tile-actions > form .btn { color: var(--lent); }
-.tile-actions > form .btn svg { stroke-width: 2.5; }
+.btn-return { color: var(--lent); }
+.btn-return svg { stroke-width: 2.5; }
 .tile.returned .tile-actions > form .btn { color: var(--muted); }
+.return-menu > summary { border-radius: 8px; }
+.return-panel { left: 0; right: auto; display: grid; gap: 10px; padding: 12px; min-width: 210px; }
+.return-row { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.stepper-sm { height: 32px; border-radius: 8px; }
+.stepper-sm button { width: 30px; font-size: 16px; }
+.stepper-sm input { width: 36px; font-size: 14px; }
+
+/* return several */
+.return-dialog {
+  width: min(560px, calc(100vw - 32px)); max-height: min(720px, calc(100dvh - 48px));
+  padding: 0; border: 1px solid var(--border); border-radius: 18px;
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg);
+}
+.return-dialog[open] { display: flex; animation: pop .15s ease-out; }
+.return-dialog::backdrop { background: rgba(8, 9, 12, .55); backdrop-filter: blur(3px); }
+.return-dialog form { display: flex; flex-direction: column; width: 100%; min-height: 0; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 12px; }
+.dialog-head h2 { font-size: 18px; }
+.dialog-head .btn-icon svg { stroke-width: 2; }
+.dialog-body { overflow: auto; padding: 4px 20px 12px; display: grid; gap: 16px; }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+.select-all { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; cursor: pointer; justify-self: start; }
+.return-batch { display: grid; gap: 2px; }
+.return-batch h3 { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
+.return-batch h3 .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.return-line { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; }
+.return-line:hover { background: var(--surface-2); }
+.return-line:has(input[name=loan_id]:checked) { background: var(--lent-soft); }
+.return-pick { flex: 1; min-width: 0; display: grid; grid-template-columns: auto 34px minmax(0, 1fr); align-items: center; gap: 10px; cursor: pointer; }
+.return-line .of { font-size: 13px; white-space: nowrap; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--lent); margin: 0; }
 
 /* ---------- empty / no matches ---------- */
 .empty { text-align: center; padding: 56px 16px; background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius); display: grid; justify-items: center; gap: 8px; }
@@ -455,7 +486,7 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 }
 @media (max-width: 600px) {
   .container { padding-top: 16px; }
-  .topbar-actions .btn-primary span { display: none; }
+  .topbar-actions .btn-primary span, .hide-sm { display: none; }
   .topbar-actions .btn-primary { width: 38px; padding: 0; }
   .summary { gap: 10px; }
   .stat { padding: 14px; }
@@ -468,6 +499,10 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
   .step { padding: 16px; }
   .page-title { font-size: 24px; }
   .pick { grid-template-columns: 96px minmax(0, 1fr); gap: 14px; }
+  .return-line { flex-wrap: wrap; row-gap: 6px; }
+  .return-pick { flex-basis: 100%; }
+  .return-line .stepper { margin-left: 72px; }
+  .dialog-head, .dialog-body, .dialog-foot { padding-left: 16px; padding-right: 16px; }
   .printings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .printings-head { flex-wrap: wrap; }
   .printings-head input { width: 100%; }

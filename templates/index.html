@@ -24,12 +24,32 @@
       <p class="tile-when">{{ l.created_at|ago|capitalize }}</p>
     </div>
     <div class="tile-actions">
-      {% if l.status == 'borrowed' %}
+      {% set return_label = 'Got it back' if direction == 'lent' else 'Gave it back' %}
+      {% if l.status == 'borrowed' and l.quantity == 1 %}
         <form method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}">
-          <button class="btn btn-sm btn-ghost" title="Mark as returned">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ 'Got it back' if direction == 'lent' else 'Gave it back' }}
+          <button class="btn btn-sm btn-ghost btn-return" title="Mark as returned">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ return_label }}
           </button>
         </form>
+      {% elif l.status == 'borrowed' %}
+        {# Several copies: ask how many came back. #}
+        <details class="menu menu-up return-menu">
+          <summary class="btn btn-sm btn-ghost btn-return" title="Mark as returned">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>{{ return_label }}
+          </summary>
+          <form class="menu-panel return-panel" method="post" action="{{ url_for('mark_returned', loan_id=l.id) }}">
+            <span class="field-label" id="ret-{{ l.id }}">How many came back?</span>
+            <div class="return-row">
+              <div class="stepper stepper-sm" aria-labelledby="ret-{{ l.id }}">
+                <button type="button" data-step="-1" aria-label="Fewer">−</button>
+                <input type="number" name="quantity" value="{{ l.quantity }}" min="1" max="{{ l.quantity }}" inputmode="numeric" aria-labelledby="ret-{{ l.id }}">
+                <button type="button" data-step="1" aria-label="More">+</button>
+              </div>
+              <span class="muted">of {{ l.quantity }}</span>
+            </div>
+            <button class="btn btn-sm btn-primary btn-block">Mark returned</button>
+          </form>
+        </details>
       {% else %}
         <form method="post" action="{{ url_for('reopen', loan_id=l.id) }}">
           <button class="btn btn-sm btn-ghost">Undo return</button>
@@ -52,6 +72,52 @@
   </article>
 {% endmacro %}
 
+{% macro return_dialog(dialog_id, grp, name, direction) %}
+  <dialog class="return-dialog" id="{{ dialog_id }}" aria-labelledby="{{ dialog_id }}-title">
+    <form method="post" action="{{ url_for('mark_several_returned') }}">
+      <header class="dialog-head">
+        <h2 id="{{ dialog_id }}-title">{{ 'What did ' ~ name ~ ' give back?' if direction == 'lent' else 'What did you give back to ' ~ name ~ '?' }}</h2>
+        <button type="button" class="btn btn-sm btn-icon" data-close-dialog aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+        </button>
+      </header>
+      <div class="dialog-body">
+        <label class="select-all"><input type="checkbox" data-select-all> Select everything</label>
+        {% for batch in grp.open_batches %}
+          <section class="return-batch">
+            <h3>{{ 'Lent' if direction == 'lent' else 'Borrowed' }} <time datetime="{{ batch.created_at.isoformat() }}" data-local>{{ batch.created_at|ago }}</time>
+              <span class="muted">· {{ batch.loans|sum(attribute='quantity') }} card{{ 's' if batch.loans|sum(attribute='quantity') != 1 }}</span></h3>
+            {% for l in batch.loans %}
+              <div class="return-line">
+                <label class="return-pick">
+                  <input type="checkbox" name="loan_id" value="{{ l.id }}" data-qty="{{ l.quantity }}">
+                  <span class="cart-thumb art finish-{{ l.finish }}">{% if l.image_url %}<img src="{{ l.image_url }}" alt="" loading="lazy">{% endif %}</span>
+                  <span class="cart-info">
+                    <strong>{{ l.card_name }}</strong>
+                    <span class="muted">{{ l.set_code|upper }} #{{ l.collector_number }}{% if l.finish != 'nonfoil' %} · {{ finishes[l.finish] }}{% endif %}</span>
+                  </span>
+                </label>
+                {% if l.quantity > 1 %}
+                  <div class="stepper stepper-sm" aria-label="How many {{ l.card_name }} came back">
+                    <button type="button" data-step="-1" aria-label="Fewer">−</button>
+                    <input type="number" name="qty_{{ l.id }}" value="{{ l.quantity }}" min="1" max="{{ l.quantity }}" inputmode="numeric" aria-label="Quantity returned">
+                    <button type="button" data-step="1" aria-label="More">+</button>
+                  </div>
+                  <span class="muted of">of {{ l.quantity }}</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </section>
+        {% endfor %}
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button class="btn btn-primary" data-submit-count disabled>Mark returned</button>
+      </footer>
+    </form>
+  </dialog>
+{% endmacro %}
+
 {% macro panel(id, title, groups, role, direction, empty_title, empty_text) %}
   <section class="panel" id="panel-{{ id }}" role="tabpanel" aria-labelledby="tab-{{ id }}">
     <h2 class="panel-title">{{ title }}</h2>
@@ -66,6 +132,11 @@
           </div>
           {% if grp.out %}<span class="pill pill-{{ id }}">{{ grp.out }} card{{ 's' if grp.out != 1 }} out</span>
           {% else %}<span class="pill">All returned</span>{% endif %}
+          {% if grp.open_rows > 1 %}
+            <button type="button" class="btn btn-sm btn-ghost" data-open-dialog="return-{{ id }}-{{ loop.index }}">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg><span class="hide-sm">Return several</span>
+            </button>
+          {% endif %}
           {% if grp.username %}
             <a class="btn btn-sm btn-icon" href="{{ url_for('new_loan', direction=direction, other=grp.username) }}"
                title="Add another card with {{ name }}" aria-label="Add another card with {{ name }}">
@@ -76,6 +147,7 @@
         <div class="card-grid">
           {% for l in grp.loans %}{{ tile(l, name, direction) }}{% endfor %}
         </div>
+        {% if grp.open_rows > 1 %}{{ return_dialog('return-' ~ id ~ '-' ~ loop.index, grp, name, direction) }}{% endif %}
       </div>
     {% else %}
       <div class="empty">

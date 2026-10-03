@@ -268,3 +268,90 @@ def test_loan_card_limit(make_client):
 def test_scryfall_cards_skips_non_uuid_ids(monkeypatch):
     monkeypatch.setattr(ledger.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
     assert ledger.scryfall_cards(["not-a-uuid"]) == {}
+
+
+# --- partial & multi-card returns -------------------------------------------
+
+def loan_rows(query):
+    return query("""SELECT c.name, l.quantity, l.status, l.batch_id IS NOT NULL FROM loans l
+                    JOIN cards c ON c.id = l.card_id ORDER BY l.id""")
+
+
+def test_partial_return_splits_row(make_client, query):
+    alice = make_client("alice")
+    lend_many(alice, [("bolt-m10", "nonfoil", 4)])
+    resp = alice.post("/loans/1/return", data={"quantity": "3"}, follow_redirects=True)
+    assert b"Marked 3 cards as returned" in resp.data
+    assert loan_rows(query) == [("Lightning Bolt", 1, "borrowed", True), ("Lightning Bolt", 3, "returned", True)]
+    same = query("""SELECT count(DISTINCT (created_at, batch_id, card_id, lender_id, borrower_id, created_by))
+                    FROM loans""")
+    assert same == [(1,)]  # the returned part keeps the original loan's identity
+    page = alice.get("/").get_data(as_text=True)
+    assert '<span class="stat-value">1</span>' in page and "card with 1 person" in page
+
+
+def test_return_without_quantity_returns_everything(make_client, query):
+    alice = make_client("alice")
+    lend(alice, quantity="4")
+    alice.post("/loans/1/return")
+    assert [r[1:3] for r in loan_rows(query)] == [(4, "returned")]
+
+
+def test_return_quantity_is_clamped(make_client, query):
+    alice = make_client("alice")
+    lend(alice, quantity="2")
+    alice.post("/loans/1/return", data={"quantity": "10"})
+    assert [r[1:3] for r in loan_rows(query)] == [(2, "returned")]
+    assert alice.post("/loans/1/return", data={"quantity": "abc"}).status_code == 400
+
+
+def test_undo_partial_return_merges_back(make_client, query):
+    alice = make_client("alice")
+    lend(alice, quantity="4")
+    alice.post("/loans/1/return", data={"quantity": "1"})
+    alice.post("/loans/1/return", data={"quantity": "2"})
+    assert [r[1:3] for r in loan_rows(query)] == [(1, "borrowed"), (1, "returned"), (2, "returned")]
+    alice.post("/loans/3/reopen")
+    assert [r[1:3] for r in loan_rows(query)] == [(3, "borrowed"), (1, "returned")]
+    alice.post("/loans/1/return")      # rest comes back...
+    alice.post("/loans/1/reopen")      # ...undo with no sibling left: row simply reopens
+    assert [r[1:3] for r in loan_rows(query)] == [(3, "borrowed"), (1, "returned")]
+
+
+def test_partial_return_of_legacy_row_gets_batch(make_client, query):
+    alice = make_client("alice")
+    lend(alice, quantity="3")
+    query("UPDATE loans SET batch_id = NULL RETURNING id")
+    alice.post("/loans/1/return", data={"quantity": "1"})
+    assert query("SELECT count(DISTINCT batch_id), count(*) FROM loans WHERE batch_id IS NOT NULL") == [(1, 2)]
+    alice.post("/loans/2/reopen")
+    assert [r[1:3] for r in loan_rows(query)] == [(3, "borrowed")]
+
+
+def test_return_several_at_once(make_client, query):
+    alice = make_client("alice")
+    lend_many(alice, [("bolt-m10", "nonfoil", 4), ("sol-ring-cmm", "foil", 1), ("bolt-m10", "foil", 2)])
+    bob = make_client("bob")
+    resp = bob.post("/returns", data=MultiDict([("loan_id", "1"), ("qty_1", "2"), ("loan_id", "2")]),
+                    follow_redirects=True)
+    assert b"Marked 3 cards as returned" in resp.data
+    assert query("""SELECT c.name, c.finish, l.quantity, l.status FROM loans l JOIN cards c ON c.id = l.card_id
+                    ORDER BY l.id""") == [
+        ("Lightning Bolt", "nonfoil", 2, "borrowed"),
+        ("Sol Ring", "foil", 1, "returned"),
+        ("Lightning Bolt", "foil", 2, "borrowed"),
+        ("Lightning Bolt", "nonfoil", 2, "returned"),
+    ]
+
+
+def test_return_several_is_all_or_nothing(make_client, query):
+    lend(make_client("alice"))                      # loan 1: alice -> bob
+    lend(make_client("carol"), other="@dave")       # loan 2: not bob's
+    bob = make_client("bob")
+    assert bob.post("/returns", data=MultiDict([("loan_id", "1"), ("loan_id", "2")])).status_code == 404
+    assert query("SELECT status FROM loans ORDER BY id") == [("borrowed",), ("borrowed",)]
+
+
+def test_return_several_needs_selection(make_client):
+    resp = make_client("alice").post("/returns", data={}, follow_redirects=True)
+    assert b"Select the cards that came back" in resp.data

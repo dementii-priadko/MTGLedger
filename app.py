@@ -363,6 +363,15 @@ def group_by_person(loans, role):
         group["loans"].append(loan)
         if loan["status"] == "borrowed":
             group["out"] += loan["quantity"]
+    for group in groups.values():
+        # Outstanding cards bundled per original loan, newest first (rows arrive sorted by date).
+        batches = {}
+        for loan in group["loans"]:
+            if loan["status"] == "borrowed":
+                key = loan["batch_id"] or f"loan-{loan['id']}"
+                batches.setdefault(key, {"created_at": loan["created_at"], "loans": []})["loans"].append(loan)
+        group["open_batches"] = list(batches.values())
+        group["open_rows"] = sum(len(b["loans"]) for b in group["open_batches"])
     return sorted(groups.values(), key=lambda g: (-g["out"], (g["username"] or g["first_name"] or "").lower()))
 
 
@@ -459,16 +468,81 @@ def own_loan_or_404(loan_id):
     return loan
 
 
+def return_loans(requested):
+    """Mark cards returned. `requested` maps loan id -> quantity coming back (None = all of it).
+
+    Returning part of a row splits it: the row keeps the cards still out and a new 'returned' row with
+    the same card, people, loan date and batch records the rest. Everything happens in one transaction;
+    any loan the user isn't part of aborts the whole request. Returns the number of cards returned.
+    """
+    db = get_db()
+    total = 0
+    for loan_id in sorted(requested):  # consistent lock order
+        loan = db.execute("SELECT * FROM loans WHERE id = %s FOR UPDATE", (loan_id,)).fetchone()
+        if loan is None or g.user["id"] not in (loan["lender_id"], loan["borrower_id"]):
+            db.rollback()
+            abort(404)
+        if loan["status"] != "borrowed":
+            continue
+        qty = requested[loan_id]
+        qty = loan["quantity"] if qty is None else max(1, min(qty, loan["quantity"]))
+        if qty == loan["quantity"]:
+            db.execute("UPDATE loans SET status = 'returned', returned_at = now() WHERE id = %s", (loan_id,))
+        else:
+            # Older rows may predate batch ids; give the pair one so an undo can merge them back.
+            db.execute(
+                "UPDATE loans SET quantity = quantity - %s, batch_id = COALESCE(batch_id, gen_random_uuid()) "
+                "WHERE id = %s",
+                (qty, loan_id),
+            )
+            db.execute(
+                """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, status, created_at, returned_at,
+                                      created_by, batch_id)
+                   SELECT card_id, lender_id, borrower_id, %s, 'returned', created_at, now(), created_by, batch_id
+                   FROM loans WHERE id = %s""",
+                (qty, loan_id),
+            )
+        total += qty
+    db.commit()
+    return total
+
+
+def parse_quantity(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        abort(400)
+
+
+def flash_returned(total):
+    if total:
+        flash(f"Marked {total} card{'s' if total != 1 else ''} as returned.", "ok")
+
+
 @app.route("/loans/<int:loan_id>/return", methods=["POST"])
 @login_required
 def mark_returned(loan_id):
-    own_loan_or_404(loan_id)
-    db = get_db()
-    db.execute(
-        "UPDATE loans SET status = 'returned', returned_at = now() WHERE id = %s AND status = 'borrowed'",
-        (loan_id,),
-    )
-    db.commit()
+    flash_returned(return_loans({loan_id: parse_quantity(request.form.get("quantity"))}))
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/returns", methods=["POST"])
+@login_required
+def mark_several_returned():
+    """Return several cards at once: repeated `loan_id` fields, each with an optional `qty_<id>`."""
+    requested = {}
+    for raw in request.form.getlist("loan_id"):
+        try:
+            loan_id = int(raw)
+        except ValueError:
+            abort(400)
+        requested[loan_id] = parse_quantity(request.form.get(f"qty_{loan_id}"))
+    if not requested:
+        flash("Select the cards that came back.", "error")
+    else:
+        flash_returned(return_loans(requested))
     return redirect(request.referrer or url_for("index"))
 
 
@@ -477,7 +551,23 @@ def mark_returned(loan_id):
 def reopen(loan_id):
     own_loan_or_404(loan_id)
     db = get_db()
-    db.execute("UPDATE loans SET status = 'borrowed', returned_at = NULL WHERE id = %s", (loan_id,))
+    loan = db.execute("SELECT * FROM loans WHERE id = %s FOR UPDATE", (loan_id,)).fetchone()
+    if loan["status"] == "returned":
+        # Undoing a partial return: fold the cards back into the row that's still out, if there is one.
+        sibling = None
+        if loan["batch_id"]:
+            sibling = db.execute(
+                """SELECT id FROM loans
+                   WHERE batch_id = %s AND card_id = %s AND lender_id = %s AND borrower_id = %s
+                     AND status = 'borrowed' AND id <> %s
+                   LIMIT 1 FOR UPDATE""",
+                (loan["batch_id"], loan["card_id"], loan["lender_id"], loan["borrower_id"], loan_id),
+            ).fetchone()
+        if sibling:
+            db.execute("UPDATE loans SET quantity = quantity + %s WHERE id = %s", (loan["quantity"], sibling["id"]))
+            db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
+        else:
+            db.execute("UPDATE loans SET status = 'borrowed', returned_at = NULL WHERE id = %s", (loan_id,))
     db.commit()
     return redirect(request.referrer or url_for("index"))
 
