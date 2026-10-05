@@ -92,9 +92,12 @@
     };
     dialog.addEventListener("change", update);
     dialog.addEventListener("input", (e) => {
-      // Adjusting a quantity implies that card came back.
+      // Checkboxes fire "input" before "change"; updating here would recompute "select everything" from
+      // the not-yet-ticked boxes and undo the click. They're handled on "change".
       const m = e.target.name?.match(/^qty_(\d+)$/);
-      if (m) dialog.querySelector(`input[name=loan_id][value="${m[1]}"]`).checked = true;
+      if (!m) return;
+      // Adjusting a quantity implies that card came back.
+      dialog.querySelector(`input[name=loan_id][value="${m[1]}"]`).checked = true;
       update();
     });
     selectAll.addEventListener("change", () => {
