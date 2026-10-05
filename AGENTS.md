@@ -76,6 +76,14 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
   2. The Login Widget iframe ("Other ways to log in").
   3. The widget's full-page redirect flow for browsers where the iframe fails (Firefox-based).
 
+## Admin panel (`/admin`)
+
+Only for Telegram ids in `ADMIN_TELEGRAM_IDS` (server `.env`); everyone else gets a 404 (`admin_required`).
+Shows totals, all users (placeholders get rename / merge-into / delete-if-no-loans), the latest 50 loans
+(admin delete), a "Send backup now" button and the admin log. Every admin write must call `admin_log()` in
+the same transaction. Merges only take a placeholder into another user and refuse pairs that share loans
+(that would create a loan with oneself).
+
 ## Schema changes
 
 There is no migration tool. `init_db()` runs `schema.sql` on every start (guarded by an advisory lock),

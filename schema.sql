@@ -101,3 +101,12 @@ CREATE TABLE IF NOT EXISTS wanted_offers (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (wanted_id, lender_id)
 );
+
+-- Admin actions (merges, renames, deletions, manual backups), shown on /admin.
+CREATE TABLE IF NOT EXISTS admin_log (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    admin_id   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    action     TEXT NOT NULL,
+    details    JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

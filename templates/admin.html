@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}{{ _("Admin panel") }} · Card Ledger{% endblock %}
+
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">
+  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4l-6 6 6 6"/></svg>{{ _("Ledger") }}
+</a>
+<div class="admin-head">
+  <h1 class="page-title">{{ _("Admin panel") }}</h1>
+  <form method="post" action="{{ url_for('admin_backup') }}" data-confirm="{{ _("Send the backup of all active loans now?") }}">
+    <button class="btn" {{ 'disabled' if not backup_ready }} title="{{ '' if backup_ready else _("No backup recipient is configured.") }}">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></svg>{{ _("Send backup now") }}
+    </button>
+  </form>
+</div>
+
+<div class="admin-stats">
+  {% for value, label in [
+      (stats.users, _("Users")), (stats.placeholders, _("Placeholders")), (stats.new_users, _("New this week")),
+      (stats.cards_out, _("Cards out")), (stats.active_loans, _("Active loans")), (stats.returned_loans, _("Returned loans")),
+      (stats.missing, _("Missing posts")), (stats.wanted, _("Wanted posts")), (stats.offers, _("Pending offers"))] %}
+    <div class="admin-stat"><span class="stat-value">{{ value }}</span><span class="muted">{{ label }}</span></div>
+  {% endfor %}
+</div>
+
+<section class="admin-section" aria-labelledby="admin-users">
+  <header class="admin-section-head">
+    <h2 id="admin-users">{{ _("Users") }} <span class="muted">· {{ users|length }}</span></h2>
+    <label class="search">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>
+      <input type="search" data-table-filter="users-table" placeholder="{{ _("Search people") }}" aria-label="{{ _("Search people") }}">
+    </label>
+  </header>
+  <div class="table-wrap">
+    <table class="admin-table" id="users-table">
+      <thead><tr>
+        <th>{{ _("Person") }}</th><th>Telegram ID</th><th>{{ _("Joined") }}</th>
+        <th class="num">{{ _("Lent out") }}</th><th class="num">{{ _("Borrowed") }}</th>
+        <th class="num">{{ _("Loans") }}</th><th class="num">{{ _("Board posts") }}</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for u in users %}
+        {% set name = person(u.username, u.first_name) %}
+        <tr data-search="{{ (name ~ ' ' ~ (u.first_name or '') ~ ' ' ~ (u.last_name or '') ~ ' ' ~ (u.telegram_id or ''))|lower }}">
+          <td>
+            <span class="admin-person">
+              {{ m.avatar(u.username, u.first_name, u.photo_url, cls="avatar avatar-xs") }}
+              <span><strong>{{ name }}</strong>{% if u.first_name and u.username %} <span class="muted">{{ u.first_name }} {{ u.last_name or '' }}</span>{% endif %}</span>
+              {% if is_admin(u) %}<span class="pill">{{ _("admin") }}</span>{% endif %}
+            </span>
+          </td>
+          <td>{% if u.telegram_id %}<code>{{ u.telegram_id }}</code>{% else %}<span class="pill">{{ _("placeholder") }}</span>{% endif %}</td>
+          <td class="muted">{{ u.created_at|ago }}</td>
+          <td class="num">{{ u.lent_out or '' }}</td>
+          <td class="num">{{ u.borrowed_out or '' }}</td>
+          <td class="num">{{ u.loan_rows or '' }}</td>
+          <td class="num">{{ u.board_posts or '' }}</td>
+          <td class="actions">
+            {% if not u.telegram_id %}
+              <button type="button" class="btn btn-sm btn-ghost" data-open-dialog="fix-{{ u.id }}">{{ _("Fix placeholder") }}</button>
+              <dialog class="return-dialog admin-dialog" id="fix-{{ u.id }}" aria-labelledby="fix-{{ u.id }}-title">
+                <div class="admin-dialog-body">
+                  <header class="dialog-head">
+                    <h2 id="fix-{{ u.id }}-title">{{ name }}</h2>
+                    <button type="button" class="btn btn-sm btn-icon" data-close-dialog aria-label="{{ _("Close") }}">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+                    </button>
+                  </header>
+                  <form method="post" action="{{ url_for('admin_rename', user_id=u.id) }}" class="admin-inline">
+                    <label class="field-label" for="rename-{{ u.id }}">{{ _("Rename (typo)") }}</label>
+                    <div class="admin-inline-row">
+                      <span class="input-prefix"><span aria-hidden="true">@</span><input id="rename-{{ u.id }}" name="username" value="{{ u.username }}" required></span>
+                      <button class="btn">{{ _("Rename") }}</button>
+                    </div>
+                  </form>
+                  <form method="post" action="{{ url_for('admin_merge', user_id=u.id) }}" class="admin-inline"
+                        data-confirm="{{ _("Move all of {name}’s loans to the user you entered and delete {name}?", name=name) }}">
+                    <label class="field-label" for="merge-{{ u.id }}">{{ _("Merge into (they renamed)") }}</label>
+                    <div class="admin-inline-row">
+                      <span class="input-prefix"><span aria-hidden="true">@</span><input id="merge-{{ u.id }}" name="into" required placeholder="username"></span>
+                      <button class="btn">{{ _("Merge") }}</button>
+                    </div>
+                  </form>
+                  {% if not u.loan_rows %}
+                    <form method="post" action="{{ url_for('admin_delete_placeholder', user_id=u.id) }}"
+                          data-confirm="{{ _("Delete {name}?", name=name) }}">
+                      <button class="btn btn-danger-ghost">{{ _("Delete placeholder") }}</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </dialog>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="admin-section" aria-labelledby="admin-loans">
+  <header class="admin-section-head">
+    <h2 id="admin-loans">{{ _("Recent loans") }} <span class="muted">· {{ _("latest {n}", n=loans|length) }}</span></h2>
+    <label class="search">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>
+      <input type="search" data-table-filter="loans-table" placeholder="{{ _("Search cards, sets or people") }}" aria-label="{{ _("Search cards, sets or people") }}">
+    </label>
+  </header>
+  <div class="table-wrap">
+    <table class="admin-table" id="loans-table">
+      <thead><tr>
+        <th>{{ _("Added") }}</th><th>{{ _("Card") }}</th><th class="num">{{ _("Qty") }}</th>
+        <th>{{ _("Lender") }}</th><th>{{ _("Borrower") }}</th><th>{{ _("Status") }}</th><th>{{ _("Recorded by") }}</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for l in loans %}
+        {% set lender = person(l.lender_username, l.lender_first_name) %}
+        {% set borrower = person(l.borrower_username, l.borrower_first_name) %}
+        <tr data-search="{{ (l.card_name ~ ' ' ~ l.set_code ~ ' ' ~ lender ~ ' ' ~ borrower)|lower }}">
+          <td class="muted">{{ l.created_at|ago }}</td>
+          <td><strong>{{ l.card_name }}</strong> <span class="muted">{{ l.set_code|upper }} #{{ l.collector_number }}{% if l.finish != 'nonfoil' %} · {{ _(finishes[l.finish]) }}{% endif %}</span></td>
+          <td class="num">{{ l.quantity }}</td>
+          <td>{{ lender }}</td>
+          <td>{{ borrower }}</td>
+          <td>{% if l.status == 'borrowed' %}<span class="pill pill-lent">{{ _("Out") }}</span>{% else %}<span class="pill">{{ _("Returned") }}</span>{% endif %}</td>
+          <td class="muted">{{ person(l.creator_username, l.creator_first_name) if l.created_by else '—' }}</td>
+          <td class="actions">
+            <form method="post" action="{{ url_for('admin_delete_loan', loan_id=l.id) }}"
+                  data-confirm="{{ _("Delete this loan for both people? This can’t be undone.") }}">
+              <button class="btn btn-sm btn-icon btn-clear" title="{{ _("Delete loan") }}" aria-label="{{ _("Delete loan") }}">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10M9 9v4M11 9v4"/></svg>
+              </button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="admin-section" aria-labelledby="admin-log">
+  <header class="admin-section-head"><h2 id="admin-log">{{ _("Admin log") }}</h2></header>
+  {% if log %}
+    <ul class="admin-log">
+      {% for entry in log %}
+        <li><span class="muted">{{ entry.created_at|ago }}</span> · <strong>{{ person(entry.username, entry.first_name) }}</strong> · <code>{{ entry.action }}</code>
+          <span class="muted">{% for k, v in entry.details.items() %}{{ k }}={{ v }}{{ ', ' if not loop.last }}{% endfor %}</span></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">{{ _("Nothing yet.") }}</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='admin.js') }}"></script>
+{% endblock %}

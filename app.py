@@ -47,6 +47,9 @@ log = logging.getLogger("ledger")
 FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 MAX_CARDS_PER_LOAN = 50
+# Telegram ids allowed into /admin (comma-separated).
+ADMIN_TELEGRAM_IDS = {int(x) for x in os.environ.get("ADMIN_TELEGRAM_IDS", "").replace(" ", "").split(",")
+                      if x.lstrip("-").isdigit()}
 
 app = Flask(__name__)
 # Behind nginx: trust X-Forwarded-Proto so external URLs (Telegram auth URL, og: tags) use https.
@@ -175,6 +178,21 @@ def login_required(view):
             # Remember where they were going (GET pages only) so the bot login can bring them back.
             wanted = request.full_path.rstrip("?") if request.method == "GET" and request.path != "/" else None
             return redirect(url_for("login", next=wanted))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def is_admin(user):
+    return bool(user and user["telegram_id"] in ADMIN_TELEGRAM_IDS)
+
+
+def admin_required(view):
+    """Admins only; everyone else gets a 404 so the page's existence isn't revealed."""
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not is_admin(g.user):
+            abort(404)
         return view(*args, **kwargs)
     return wrapped
 
@@ -1256,6 +1274,152 @@ def delete_loan(loan_id):
     db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
     db.commit()
     return back_or_index()
+
+
+
+# --- admin ---------------------------------------------------------------------------
+
+app.jinja_env.globals["is_admin"] = is_admin
+
+
+def admin_log(db, action, **details):
+    db.execute("INSERT INTO admin_log (admin_id, action, details) VALUES (%s, %s, %s)",
+               (g.user["id"], action, json.dumps(details, default=str)))
+
+
+@app.route("/admin")
+@admin_required
+def admin():
+    db = get_db()
+    stats = db.execute(
+        """SELECT (SELECT count(*) FROM users WHERE telegram_id IS NOT NULL) AS users,
+                  (SELECT count(*) FROM users WHERE telegram_id IS NULL) AS placeholders,
+                  (SELECT count(*) FROM loans WHERE status = 'borrowed') AS active_loans,
+                  (SELECT COALESCE(sum(quantity), 0) FROM loans WHERE status = 'borrowed') AS cards_out,
+                  (SELECT count(*) FROM loans WHERE status = 'returned') AS returned_loans,
+                  (SELECT count(*) FROM missing_cards) AS missing,
+                  (SELECT count(*) FROM wanted_cards) AS wanted,
+                  (SELECT count(*) FROM wanted_offers) AS offers,
+                  (SELECT count(*) FROM users WHERE created_at > now() - interval '7 days') AS new_users"""
+    ).fetchone()
+    users = db.execute(
+        """SELECT u.*,
+                  COALESCE(sum(l.quantity) FILTER (WHERE l.lender_id = u.id AND l.status = 'borrowed'), 0) AS lent_out,
+                  COALESCE(sum(l.quantity) FILTER (WHERE l.borrower_id = u.id AND l.status = 'borrowed'), 0) AS borrowed_out,
+                  count(l.id) AS loan_rows,
+                  (SELECT count(*) FROM missing_cards m WHERE m.owner_id = u.id)
+                    + (SELECT count(*) FROM wanted_cards w WHERE w.owner_id = u.id) AS board_posts
+           FROM users u LEFT JOIN loans l ON u.id IN (l.lender_id, l.borrower_id)
+           GROUP BY u.id ORDER BY u.telegram_id IS NULL, u.created_at DESC"""
+    ).fetchall()
+    loans = db.execute(
+        f"""{LOAN_SELECT.replace("SELECT l.*,", "SELECT l.*, cu.username AS creator_username, cu.first_name AS creator_first_name,", 1)}
+            LEFT JOIN users cu ON cu.id = l.created_by
+            ORDER BY l.created_at DESC, l.id DESC LIMIT 50"""
+    ).fetchall()
+    entries = db.execute(
+        """SELECT a.*, u.username, u.first_name FROM admin_log a LEFT JOIN users u ON u.id = a.admin_id
+           ORDER BY a.created_at DESC LIMIT 30"""
+    ).fetchall()
+    return render_template("admin.html", stats=stats, users=users, loans=loans, log=entries, finishes=FINISHES,
+                           backup_ready=bool(os.environ.get("BACKUP_CHAT_ID") or os.environ.get("BACKUP_TELEGRAM_USERNAME")))
+
+
+def placeholder_or_404(db, user_id):
+    row = db.execute("SELECT * FROM users WHERE id = %s AND telegram_id IS NULL FOR UPDATE", (user_id,)).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+@app.route("/admin/users/<int:user_id>/rename", methods=["POST"])
+@admin_required
+def admin_rename(user_id):
+    db = get_db()
+    placeholder = placeholder_or_404(db, user_id)
+    new = request.form.get("username", "").strip().lstrip("@")
+    if not USERNAME_RE.match(new):
+        flash(_("Enter a valid username."), "error")
+    elif db.execute("SELECT 1 FROM users WHERE lower(username) = lower(%s) AND id <> %s", (new, user_id)).fetchone():
+        flash(_("@{username} already exists — merge into it instead.", username=new), "error")
+    else:
+        db.execute("UPDATE users SET username = %s WHERE id = %s", (new, user_id))
+        admin_log(db, "rename_placeholder", user_id=user_id, old=placeholder["username"], new=new)
+        db.commit()
+        flash(_("Renamed @{old} to @{new}.", old=placeholder["username"], new=new), "ok")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/users/<int:user_id>/merge", methods=["POST"])
+@admin_required
+def admin_merge(user_id):
+    db = get_db()
+    placeholder = placeholder_or_404(db, user_id)
+    target_name = request.form.get("into", "").strip().lstrip("@")
+    target = db.execute("SELECT * FROM users WHERE lower(username) = lower(%s) AND id <> %s",
+                        (target_name, user_id)).fetchone() if target_name else None
+    if target is None:
+        flash(_("No user @{username}.", username=target_name), "error")
+    elif db.execute("SELECT 1 FROM loans WHERE (lender_id, borrower_id) IN ((%s, %s), (%s, %s)) LIMIT 1",
+                    (user_id, target["id"], target["id"], user_id)).fetchone():
+        # Merging would turn their loans with each other into loans with oneself.
+        flash(_("@{a} and @{b} have loans with each other, so they can’t be merged.",
+                a=placeholder["username"], b=target["username"]), "error")
+    else:
+        moved = db.execute("SELECT count(*) AS n FROM loans WHERE %s IN (lender_id, borrower_id)", (user_id,)).fetchone()["n"]
+        merge_users(db, target["id"], user_id)
+        admin_log(db, "merge_placeholder", placeholder=placeholder["username"], into=target["username"], loans=moved)
+        db.commit()
+        flash(_("Merged @{a} into @{b}.", a=placeholder["username"], b=target["username"]), "ok")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
+@admin_required
+def admin_delete_placeholder(user_id):
+    db = get_db()
+    placeholder = placeholder_or_404(db, user_id)
+    if db.execute("SELECT 1 FROM loans WHERE %s IN (lender_id, borrower_id) LIMIT 1", (user_id,)).fetchone():
+        flash(_("@{username} still has loans; merge or delete those first.", username=placeholder["username"]), "error")
+    else:
+        db.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        admin_log(db, "delete_placeholder", username=placeholder["username"])
+        db.commit()
+        flash(_("Deleted @{username}.", username=placeholder["username"]), "ok")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/loans/<int:loan_id>/delete", methods=["POST"])
+@admin_required
+def admin_delete_loan(loan_id):
+    db = get_db()
+    loan = db.execute(f"{LOAN_SELECT} WHERE l.id = %s", (loan_id,)).fetchone()
+    if loan is None:
+        abort(404)
+    db.execute("DELETE FROM loans WHERE id = %s", (loan_id,))
+    admin_log(db, "delete_loan", loan_id=loan_id, card=loan["card_name"], quantity=loan["quantity"],
+              status=loan["status"], lender=person(loan["lender_username"], loan["lender_first_name"]),
+              borrower=person(loan["borrower_username"], loan["borrower_first_name"]))
+    db.commit()
+    flash(_("Loan deleted."), "ok")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/backup", methods=["POST"])
+@admin_required
+def admin_backup():
+    import backup
+    db = get_db()
+    try:
+        summary = backup.run_backup()
+    except Exception as e:
+        log.exception("manual backup failed")
+        flash(_("Backup failed: {error}", error=str(e)[:200]), "error")
+        return redirect(url_for("admin"))
+    admin_log(db, "backup", summary=summary)
+    db.commit()
+    flash(_("Backup sent."), "ok")
+    return redirect(url_for("admin"))
 
 
 init_db()

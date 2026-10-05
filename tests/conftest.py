@@ -6,6 +6,7 @@ os.environ["TELEGRAM_BOT_TOKEN"] = "123:test-token"
 os.environ["TELEGRAM_BOT_USERNAME"] = "test_bot"
 os.environ["DEV_LOGIN"] = "1"
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-webhook-secret"
+os.environ["ADMIN_TELEGRAM_IDS"] = "8017026444"
 os.environ["SECRET_KEY"] = "test"
 
 import psycopg

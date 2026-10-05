@@ -69,6 +69,7 @@
                    {% if code == g.lang %}aria-current="true"{% endif %}>{{ label }}</a>
               {% endfor %}
             </div>
+            {% if is_admin(g.user) %}<a class="menu-item" href="{{ url_for('admin') }}">{{ _("Admin panel") }}</a>{% endif %}
             <form method="post" action="{{ url_for('logout') }}"><button class="menu-item">{{ _("Log out") }}</button></form>
           </div>
         </details>
