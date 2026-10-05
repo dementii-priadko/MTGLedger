@@ -117,18 +117,18 @@ def test_hide_and_show_a_person(make_client, query):
     report(kolya)
     trade(kolya, "petya")
     assert b"Hidden people" not in petya.get("/missing").data
-    petya.post("/missing/people/1/hide")
+    petya.post("/board/people/1/hide")
     page = petya.get("/missing").data.decode()
-    assert "Lightning Bolt" not in page and "Hidden people" in page and "/missing/people/1/show" in page
+    assert "Lightning Bolt" not in page and "Hidden people" in page and "/board/people/1/show" in page
     assert petya.post("/missing/1/claim").status_code == 404  # hidden cards can't be claimed either
     assert b"Lightning Bolt" in kolya.get("/missing").data  # hiding is one-sided
-    petya.post("/missing/people/1/show")
+    petya.post("/board/people/1/show")
     assert b"Lightning Bolt" in petya.get("/missing").data
 
 
 def test_cannot_hide_a_non_contact(make_client):
     make_client("kolya")
-    assert make_client("stranger").post("/missing/people/1/hide").status_code == 404
+    assert make_client("stranger").post("/board/people/1/hide").status_code == 404
 
 
 def test_contacts_are_backfilled_from_existing_loans(make_client, query):

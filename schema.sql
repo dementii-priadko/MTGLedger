@@ -77,3 +77,27 @@ CREATE TABLE IF NOT EXISTS contacts (
 INSERT INTO contacts (user_id, contact_id)
 SELECT lender_id, borrower_id FROM loans UNION SELECT borrower_id, lender_id FROM loans
 ON CONFLICT DO NOTHING;
+
+-- "Looking for": cards someone would like to borrow, shown to their contacts like the Missing board.
+-- any_printing: any version will do (card_id is then just a representative printing for the name and
+-- picture); the lender picks the exact printing when offering.
+CREATE TABLE IF NOT EXISTS wanted_cards (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    card_id      BIGINT NOT NULL REFERENCES cards(id),
+    owner_id     BIGINT NOT NULL REFERENCES users(id),
+    quantity     INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    any_printing BOOLEAN NOT NULL DEFAULT false,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (owner_id, card_id, any_printing)
+);
+
+-- A contact offering to lend a wanted card. Nothing reaches the ledger until the requester accepts.
+CREATE TABLE IF NOT EXISTS wanted_offers (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    wanted_id  BIGINT NOT NULL REFERENCES wanted_cards(id) ON DELETE CASCADE,
+    lender_id  BIGINT NOT NULL REFERENCES users(id),
+    card_id    BIGINT REFERENCES cards(id),          -- the printing offered for an any-version request
+    quantity   INTEGER NOT NULL CHECK (quantity > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (wanted_id, lender_id)
+);

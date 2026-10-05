@@ -21,8 +21,8 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
 | `schema.sql` | Database schema, applied on every app start (must stay idempotent) |
 | `i18n.py` | Translation catalog (English keys → Ukrainian) and plural rules |
 | `backup.py` | Daily CSV backup of active loans, sent via the Telegram bot (separate compose service) |
-| `templates/` | `base.html` layout; `index.html` home; `person.html` one person; `new_loan.html` (also reports missing cards); `missing.html` the Missing board; `login.html`; `_macros.html` shared tile/dialog/action macros (import `with context`) |
-| `static/` | `style.css` (all styles, light/dark tokens), `ledger.js` (home + person page), `new_loan.js` (loan form), `og-image.png` (link preview) |
+| `templates/` | `base.html` layout; `index.html` home; `person.html` one person; `new_loan.html` (also posts to the board: `direction=missing`/`wanted`); `board.html` the Wanted board (Missing + Looking for tabs); `login.html`; `_macros.html` shared tile/dialog/action macros (import `with context`) |
+| `static/` | `style.css` (all styles, light/dark tokens), `ledger.js` (home + person page), `board.js` (offer dialog for any-version requests), `new_loan.js` (loan form, incl. pasted decklists resolved via Scryfall `/cards/collection`), `og-image.png` (link preview) |
 | `tests/` | pytest suite against a real Postgres; Scryfall is faked |
 | `docker-compose.yml` | `db` (Postgres), `app` (gunicorn), `backup` (daily job) |
 | `.github/workflows/ci-cd.yml` | Tests + Docker build on every push/PR; deploy to the server on `main` |
@@ -38,14 +38,21 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
   `status` (`borrowed`/`returned`), `created_at`, `returned_at`, `created_by`, plus:
   - `batch_id`: rows recorded together in one "loan" share it.
   - `hidden_by_lender` / `hidden_by_borrower`: per-side "deleted from my ledger" flags for *returned* rows.
-- **missing_cards**: the *Missing* board (`/missing`): cards the owner lent out but lost track of, one row per
+- **missing_cards**: the board's *Missing* tab (`/missing`): cards the owner lent out but lost track of, one row per
   owner + card (re-reporting adds to `quantity`). Reported through the loan form with `direction=missing`. You see
   your own cards plus those of your **contacts** you haven't hidden. A contact can claim copies ("It's with me"),
   which moves them into a normal loan (owner → claimer, created by the claimer); only the owner can mark them
   found. Partial claims/finds decrement the row (`take_missing`).
+- **wanted_cards** / **wanted_offers**: the board's *Looking for* tab (`/wanted`): cards someone would like to
+  borrow, same shape and visibility as `missing_cards`. `any_printing` = "Any version" (one row per owner + card
+  *name*; `card_id` only stands in for the card); the offerer then picks the printing and finish they lend
+  (`wanted_offers.card_id`, chosen in `static/board.js`). A contact offers copies ("I can lend it"; one offer per
+  person per card); nothing is recorded until the requester **accepts**, which creates the loan (offerer → requester,
+  created by the requester) and shrinks or deletes the request (offers cascade). Declining/withdrawing deletes the
+  offer. Pending offers put a dot on the top-bar link (`inject_pending_offers`).
 - **contacts**: who has traded with whom, one row per direction (`add_contacts` on every new loan; backfilled
   from `loans` in `schema.sql`). Rows outlive cleared loans. `hidden` is per side: the user stopped seeing that
-  person's Missing cards. Placeholder merges carry contacts over (`merge_users`).
+  person's board cards (both tabs). Placeholder merges carry contacts over (`merge_users`).
 
 ### Invariants and rules (keep these when changing behavior)
 

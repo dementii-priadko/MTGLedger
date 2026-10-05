@@ -509,12 +509,16 @@ def get_or_create_mtg_cards(items):
 
 
 def parse_cart(form):
-    """Read the card lines of a new-loan form; returns ([(scryfall_id, finish, qty), ...], error)."""
+    """Read the card lines of a new-loan form; returns ([(scryfall_id, finish, qty, any_printing), ...], error).
+
+    `any_printing` lines ("Any version", wanted cards only) still name a printing: it stands in for the card.
+    """
     ids, finishes, quantities = form.getlist("scryfall_id"), form.getlist("finish"), form.getlist("quantity")
-    if not (len(ids) == len(finishes) == len(quantities)):
+    anys = form.getlist("any_printing") or ["0"] * len(ids)
+    if not (len(ids) == len(finishes) == len(quantities) == len(anys)):
         return [], _("The card list was malformed, please try again.")
     lines = {}
-    for sid, finish, qty in zip(ids, finishes, quantities):
+    for sid, finish, qty, any_printing in zip(ids, finishes, quantities, anys):
         sid = sid.strip()
         if not sid:
             continue
@@ -527,13 +531,14 @@ def parse_cart(form):
         if not 1 <= qty <= 99:
             return [], _("Quantity must be between 1 and 99.")
         # The same printing+finish added twice becomes one line.
-        lines[sid, finish] = min(99, lines.get((sid, finish), 0) + qty)
+        key = (sid, finish, any_printing == "1")
+        lines[key] = min(99, lines.get(key, 0) + qty)
     if not lines:
         return [], _("Add at least one card.")
     if len(lines) > MAX_CARDS_PER_LOAN:
         return [], _n("A loan can have at most {n} different card.", "A loan can have at most {n} different cards.",
                       MAX_CARDS_PER_LOAN)
-    return [(sid, finish, qty) for (sid, finish), qty in lines.items()], None
+    return [(sid, finish, qty, any_printing) for (sid, finish, any_printing), qty in lines.items()], None
 
 
 # --- ledger -----------------------------------------------------------------
@@ -733,31 +738,31 @@ def new_loan():
         other = form.get("other", "").strip().lstrip("@")
         lines, error = parse_cart(form)
 
-        # "missing": lent out to someone, but who? Goes on the Missing board instead of the ledger.
-        if direction not in ("lent", "borrowed", "missing"):
+        # "missing" (lent out, but to whom?) and "wanted" (looking to borrow) go on the board, not to a person.
+        on_board = direction in BOARD_TABLES
+        if direction not in ("lent", "borrowed") and not on_board:
             error = _("Choose whether you lent or borrowed the cards.")
-        elif direction != "missing" and not USERNAME_RE.match(other):
+        elif not on_board and not USERNAME_RE.match(other):
             error = _("Enter the other person's Telegram @username.")
-        elif direction != "missing" and g.user["username"] and other.lower() == g.user["username"].lower():
+        elif not on_board and g.user["username"] and other.lower() == g.user["username"].lower():
             error = _("You can't lend cards to yourself.")
 
         if error is None:
             try:
-                card_ids = get_or_create_mtg_cards([(sid, finish) for sid, finish, _ in lines])
+                card_ids = get_or_create_mtg_cards([(sid, finish) for sid, finish, *_rest in lines])
             except ValueError as e:
                 error = str(e)
 
-        if error is None and direction == "missing":
-            with db.cursor() as cur:
-                cur.executemany(
-                    """INSERT INTO missing_cards (card_id, owner_id, quantity) VALUES (%s, %s, %s)
-                       ON CONFLICT (owner_id, card_id) DO UPDATE SET quantity = missing_cards.quantity + EXCLUDED.quantity""",
-                    [(card_id, g.user["id"], qty) for card_id, (_, _, qty) in zip(card_ids, lines)],
-                )
+        if error is None and on_board:
+            for card_id, (_sid, _finish, qty, any_printing) in zip(card_ids, lines):
+                post_to_board(direction, card_id, qty, any_printing and direction == "wanted")
             db.commit()
-            total = sum(qty for _, _, qty in lines)
-            flash(_n("Added {n} card to Missing.", "Added {n} cards to Missing.", total), "ok")
-            return redirect(url_for("missing"))
+            total = sum(line[2] for line in lines)
+            if direction == "missing":
+                flash(_n("Added {n} card to Missing.", "Added {n} cards to Missing.", total), "ok")
+            else:
+                flash(_n("Added {n} card to your list.", "Added {n} cards to your list.", total), "ok")
+            return redirect(url_for(direction))
 
         if error is None:
             other_id = get_or_create_user_by_username(other)
@@ -768,12 +773,11 @@ def new_loan():
                 cur.executemany(
                     """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by, batch_id)
                        VALUES (%s, %s, %s, %s, %s, %s)""",
-                    [(card_id, lender, borrower, qty, me, batch_id)
-                     for card_id, (_, _, qty) in zip(card_ids, lines)],
+                    [(card_id, lender, borrower, line[2], me, batch_id) for card_id, line in zip(card_ids, lines)],
                 )
             add_contacts(db, lender, borrower)
             db.commit()
-            total = sum(qty for _, _, qty in lines)
+            total = sum(line[2] for line in lines)
             flash(_n("Loan recorded: {n} card.", "Loan recorded: {n} cards.", total), "ok")
             return redirect(url_for("index", _anchor=direction))
         db.rollback()
@@ -791,21 +795,62 @@ def new_loan():
     return render_template("new_loan.html", people=people, finishes=FINISHES, prefill=prefill)
 
 
-# --- missing board ------------------------------------------------------------------
+# --- the board: missing and wanted cards ---------------------------------------------
+# Two tabs with the same shape: cards people post for their contacts to see, one row per owner + card.
+# Missing = lent out, lost track of to whom; Wanted ("Looking for") = would like to borrow.
+
+BOARD_TABLES = {"missing": "missing_cards", "wanted": "wanted_cards"}
+# Cards the viewer sees: their own and those of contacts they haven't hidden.
+BOARD_VISIBLE = "(owner_id = %(me)s OR owner_id IN (SELECT contact_id FROM contacts WHERE user_id = %(me)s AND NOT hidden))"
+
+
+def post_to_board(tab, card_id, qty, any_printing=False):
+    """Add copies to the viewer's Missing or Looking-for list, adding up with what's already there."""
+    db, me = get_db(), g.user["id"]
+    if any_printing:
+        # "Any version" requests are one per card name, whichever printing stood in for it.
+        if db.execute(
+            """UPDATE wanted_cards w SET quantity = w.quantity + %(qty)s FROM cards c, cards new
+               WHERE w.owner_id = %(me)s AND w.any_printing AND c.id = w.card_id AND new.id = %(card)s
+                 AND c.name = new.name
+               RETURNING w.id""",
+            {"qty": qty, "me": me, "card": card_id},
+        ).fetchone():
+            return
+        db.execute("INSERT INTO wanted_cards (card_id, owner_id, quantity, any_printing) VALUES (%s, %s, %s, true)",
+                   (card_id, me, qty))
+        return
+    table = BOARD_TABLES[tab]
+    key = "owner_id, card_id, any_printing" if tab == "wanted" else "owner_id, card_id"
+    db.execute(
+        f"""INSERT INTO {table} (card_id, owner_id, quantity) VALUES (%s, %s, %s)
+            ON CONFLICT ({key}) DO UPDATE SET quantity = {table}.quantity + EXCLUDED.quantity""",
+        (card_id, me, qty),
+    )
+
 
 @app.route("/missing")
 @login_required
 def missing():
-    """Lost-track-of cards of you and the people you've traded with (minus those you hid), grouped by owner
-    (yours first), so they can check whether they have one."""
+    """Cards your contacts lent out and lost track of, so you can check whether you have one."""
+    return render_board("missing")
+
+
+@app.route("/wanted")
+@login_required
+def wanted():
+    """Cards your contacts would like to borrow, so you can offer yours."""
+    return render_board("wanted")
+
+
+def render_board(tab):
     db, me = get_db(), g.user["id"]
     rows = db.execute(
-        """SELECT m.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
-                  u.username, u.first_name, u.photo_url
-           FROM missing_cards m JOIN cards c ON c.id = m.card_id JOIN users u ON u.id = m.owner_id
-           WHERE m.owner_id = %(me)s
-              OR m.owner_id IN (SELECT contact_id FROM contacts WHERE user_id = %(me)s AND NOT hidden)
-           ORDER BY m.created_at DESC""",
+        f"""SELECT b.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
+                   u.username, u.first_name, u.photo_url
+            FROM {BOARD_TABLES[tab]} b JOIN cards c ON c.id = b.card_id JOIN users u ON u.id = b.owner_id
+            WHERE {BOARD_VISIBLE}
+            ORDER BY b.created_at DESC""",
         {"me": me},
     ).fetchall()
     groups = {}
@@ -817,16 +862,46 @@ def missing():
         group["cards"].append(row)
         group["total"] += row["quantity"]
     ordered = sorted(groups.values(), key=lambda grp: (grp["id"] != me, -grp["total"]))
+    # Offers the viewer may see: all offers on their own wanted cards, and their own offers on others'.
+    offers = {}
+    if tab == "wanted":
+        for offer in db.execute(
+            """SELECT o.*, u.username, u.first_name,
+                      oc.set_code AS offer_set, oc.collector_number AS offer_number, oc.finish AS offer_finish
+               FROM wanted_offers o
+               JOIN wanted_cards w ON w.id = o.wanted_id JOIN users u ON u.id = o.lender_id
+               LEFT JOIN cards oc ON oc.id = o.card_id
+               WHERE w.owner_id = %(me)s OR o.lender_id = %(me)s ORDER BY o.created_at""",
+            {"me": me},
+        ):
+            offers.setdefault(offer["wanted_id"], []).append(offer)
+    counts = db.execute(
+        f"""SELECT (SELECT COALESCE(SUM(quantity), 0) FROM missing_cards WHERE {BOARD_VISIBLE}) AS missing,
+                   (SELECT COALESCE(SUM(quantity), 0) FROM wanted_cards WHERE {BOARD_VISIBLE}) AS wanted""",
+        {"me": me},
+    ).fetchone()
     hidden = db.execute(
         """SELECT u.id, u.username, u.first_name FROM contacts c JOIN users u ON u.id = c.contact_id
            WHERE c.user_id = %s AND c.hidden ORDER BY lower(COALESCE(u.username, u.first_name))""",
         (me,),
     ).fetchall()
-    return render_template("missing.html", groups=ordered, hidden=hidden, finishes=FINISHES)
+    return render_template("board.html", tab=tab, groups=ordered, offers=offers, counts=counts, hidden=hidden,
+                           finishes=FINISHES)
+
+
+@app.context_processor
+def inject_pending_offers():
+    """Offers waiting on the viewer's wanted cards, flagged on the board link in the top bar."""
+    if not g.get("user"):
+        return {}
+    return {"pending_offers": get_db().execute(
+        "SELECT count(*) AS n FROM wanted_offers o JOIN wanted_cards w ON w.id = o.wanted_id WHERE w.owner_id = %s",
+        (g.user["id"],),
+    ).fetchone()["n"]}
 
 
 def visible_to_me(owner_id):
-    """Whether the viewer sees this owner's Missing cards (a contact they haven't hidden)."""
+    """Whether the viewer sees this owner's board cards (a contact they haven't hidden)."""
     return get_db().execute(
         "SELECT 1 FROM contacts WHERE user_id = %s AND contact_id = %s AND NOT hidden", (g.user["id"], owner_id)
     ).fetchone() is not None
@@ -888,10 +963,10 @@ def found_missing(missing_id):
     return back_or_index()
 
 
-@app.route("/missing/people/<int:person_id>/<any(hide, show):action>", methods=["POST"])
+@app.route("/board/people/<int:person_id>/<any(hide, show):action>", methods=["POST"])
 @login_required
-def toggle_missing_person(person_id, action):
-    """Stop (or start again) seeing one contact's cards on the Missing board."""
+def toggle_board_person(person_id, action):
+    """Stop (or start again) seeing one contact's cards on the board (both tabs)."""
     db = get_db()
     row = db.execute(
         """UPDATE contacts SET hidden = %s WHERE user_id = %s AND contact_id = %s
@@ -902,7 +977,130 @@ def toggle_missing_person(person_id, action):
         abort(404)
     db.commit()
     if action == "hide":
-        flash(_("You won’t see {name}’s missing cards any more.", name=row["name"]), "ok")
+        flash(_("You won’t see {name}’s cards here any more.", name=row["name"]), "ok")
+    return back_or_index()
+
+
+# --- wanted cards and offers ----------------------------------------------------------
+
+def wanted_or_404(wanted_id):
+    row = get_db().execute(
+        """SELECT w.*, c.name AS card_name, u.username, u.first_name
+           FROM wanted_cards w JOIN cards c ON c.id = w.card_id JOIN users u ON u.id = w.owner_id
+           WHERE w.id = %s""",
+        (wanted_id,),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+@app.route("/wanted/<int:wanted_id>/offer", methods=["POST"])
+@login_required
+def offer_wanted(wanted_id):
+    """"I can lend it": offer copies to the requester, who confirms before anything is recorded."""
+    row, me = wanted_or_404(wanted_id), g.user["id"]
+    if row["owner_id"] == me:
+        abort(400)
+    if not visible_to_me(row["owner_id"]):
+        abort(404)
+    qty = parse_quantity(request.form.get("quantity"))
+    qty = row["quantity"] if qty is None else max(1, min(qty, row["quantity"]))
+    db = get_db()
+    card_id = None
+    if row["any_printing"]:
+        # Any version will do: the lender says which printing and finish they're lending.
+        sid, finish = request.form.get("scryfall_id", "").strip(), request.form.get("finish")
+        if not sid or finish not in FINISHES:
+            abort(400)
+        try:
+            [card_id] = get_or_create_mtg_cards([(sid, finish)])
+        except ValueError as e:
+            db.rollback()
+            flash(str(e), "error")
+            return back_or_index()
+        name = db.execute("SELECT name FROM cards WHERE id = %s", (card_id,)).fetchone()["name"]
+        if name.lower() != row["card_name"].lower():
+            db.rollback()
+            abort(400)  # a printing of some other card
+    db.execute(
+        """INSERT INTO wanted_offers (wanted_id, lender_id, card_id, quantity) VALUES (%s, %s, %s, %s)
+           ON CONFLICT (wanted_id, lender_id) DO UPDATE SET card_id = EXCLUDED.card_id, quantity = EXCLUDED.quantity""",
+        (wanted_id, me, card_id, qty),
+    )
+    db.commit()
+    flash(_("Offer sent. {name} will see it.", name=person(row["username"], row["first_name"])), "ok")
+    return back_or_index()
+
+
+@app.route("/wanted/<int:wanted_id>/withdraw", methods=["POST"])
+@login_required
+def withdraw_offer(wanted_id):
+    db = get_db()
+    db.execute("DELETE FROM wanted_offers WHERE wanted_id = %s AND lender_id = %s", (wanted_id, g.user["id"]))
+    db.commit()
+    return back_or_index()
+
+
+@app.route("/wanted/<int:wanted_id>/remove", methods=["POST"])
+@login_required
+def remove_wanted(wanted_id):
+    """The requester doesn't need it any more (offers on it go too)."""
+    if wanted_or_404(wanted_id)["owner_id"] != g.user["id"]:
+        abort(403)
+    db = get_db()
+    db.execute("DELETE FROM wanted_cards WHERE id = %s", (wanted_id,))
+    db.commit()
+    flash(_("Removed from your list."), "ok")
+    return back_or_index()
+
+
+def own_offer_or_404(offer_id):
+    """Lock an offer on one of the viewer's wanted cards (and that card)."""
+    row = get_db().execute(
+        """SELECT o.id, o.wanted_id, o.lender_id, o.quantity, w.owner_id, w.quantity AS wanted_quantity,
+                  COALESCE(o.card_id, w.card_id) AS loan_card_id, c.name AS card_name, u.username, u.first_name
+           FROM wanted_offers o JOIN wanted_cards w ON w.id = o.wanted_id
+           JOIN cards c ON c.id = w.card_id JOIN users u ON u.id = o.lender_id
+           WHERE o.id = %s FOR UPDATE OF o, w""",
+        (offer_id,),
+    ).fetchone()
+    if row is None or row["owner_id"] != g.user["id"]:
+        get_db().rollback()
+        abort(404)
+    return row
+
+
+@app.route("/offers/<int:offer_id>/accept", methods=["POST"])
+@login_required
+def accept_offer(offer_id):
+    """The requester takes the offer: it becomes a loan (offerer -> requester) and comes off their list."""
+    offer, me, db = own_offer_or_404(offer_id), g.user["id"], get_db()
+    qty = min(offer["quantity"], offer["wanted_quantity"])  # the request may have shrunk since the offer
+    db.execute(
+        """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by, batch_id)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (offer["loan_card_id"], offer["lender_id"], me, qty, me, uuid.uuid4()),
+    )
+    add_contacts(db, offer["lender_id"], me)
+    if qty == offer["wanted_quantity"]:
+        db.execute("DELETE FROM wanted_cards WHERE id = %s", (offer["wanted_id"],))  # other offers go with it
+    else:
+        db.execute("UPDATE wanted_cards SET quantity = quantity - %s WHERE id = %s", (qty, offer["wanted_id"]))
+        db.execute("DELETE FROM wanted_offers WHERE id = %s", (offer_id,))
+    db.commit()
+    flash(_("{card} from {name} is now in your ledger.", card=offer["card_name"],
+            name=person(offer["username"], offer["first_name"])), "ok")
+    return back_or_index()
+
+
+@app.route("/offers/<int:offer_id>/decline", methods=["POST"])
+@login_required
+def decline_offer(offer_id):
+    own_offer_or_404(offer_id)
+    db = get_db()
+    db.execute("DELETE FROM wanted_offers WHERE id = %s", (offer_id,))
+    db.commit()
     return back_or_index()
 
 

@@ -175,6 +175,16 @@ UK = {
     "Add at least one card to the loan.": "Додайте до позики хоча б одну карту.",
     "Saving…": "Збереження…",
     "Unknown card": "Невідома карта",
+    "Paste a decklist": "Вставити декліст",
+    "Decklist": "Декліст",
+    "One card per line, like “4 Lightning Bolt”. Arena, MTGO and Moxfield exports work; a set code in brackets, like “(MH2) 267”, picks that edition, and *F* marks a foil.":
+        "Одна карта на рядок, напр. «4 Lightning Bolt». Підходять експорти з Arena, MTGO і Moxfield; код сету в дужках, як «(MH2) 267», вибирає видання, а *F* позначає фойл.",
+    "Add these cards": "Додати ці карти",
+    "No cards found in that list. Each line should start with a number, like “4 Lightning Bolt”.":
+        "У списку не знайдено карт. Кожен рядок має починатися з числа, напр. «4 Lightning Bolt».",
+    "Looking up cards…": "Шукаю карти…",
+    "Tap a card in the list to change its edition.": "Натисніть на карту в списку, щоб змінити видання.",
+    "Not found on Scryfall: {names}": "Не знайдено на Scryfall: {names}",
 
     # finishes
     "Non-foil": "Звичайна",
@@ -195,8 +205,10 @@ UK = {
     "You can't lend cards to yourself.": "Не можна позичати карти самому собі.",
 
     # missing board
-    "Missing": "Розшук",
-    "Cards friends lost track of": "Карти, яких друзі не можуть знайти",
+    "Wanted": "Розшук",
+    "Missing": "Зниклі",
+    "Looking for": "Шукають",
+    "Lost and wanted cards": "Зниклі й шукані карти",
     "Missing cards": "Зниклі карти",
     "Cards that people you’ve traded with lent out and lost track of. If one of them is with you, press “{button}”: it moves into your ledger as borrowed from its owner.":
         "Карти, які люди, з якими ви мінялися, комусь позичили й забули кому. Якщо одна з них у вас, натисніть «{button}» — вона з’явиться у вашому обліку як позичена в її власника.",
@@ -221,9 +233,40 @@ UK = {
     "{card} from {name} is now in your ledger.": "{card} від {name} тепер у вашому обліку.",
     "Removed from Missing.": "Прибрано з розшуку.",
     "Hide {name}’s cards": "Приховати карти {name}",
-    "You won’t see {name}’s missing cards any more.": "Ви більше не бачитимете зниклих карт {name}.",
+    "You won’t see {name}’s cards here any more.": "Ви більше не бачитимете тут карт {name}.",
     "Hidden people": "Приховані люди",
     "Show again": "Показувати знову",
+
+    # wanted cards ("Looking for") and offers
+    "Cards that people you’ve traded with would like to borrow. Have one to spare? Press “{button}”; once they accept, it goes into both your ledgers.":
+        "Карти, які люди, з якими ви мінялися, хочуть позичити. Маєте зайву? Натисніть «{button}» — коли вони приймуть пропозицію, вона з’явиться в обліку у вас обох.",
+    "I can lend it": "Можу позичити",
+    "How many can you lend?": "Скільки можете позичити?",
+    "Offer": "Запропонувати",
+    "You offered ×{n}": "Ви запропонували ×{n}",
+    "Withdraw": "Відкликати",
+    "Remove {card} from your list?": "Прибрати {card} зі списку?",
+    "Accept {name}’s offer? {card} goes into both your ledgers as borrowed from {name}.":
+        "Прийняти пропозицію {name}? {card} з’явиться в обліку у вас обох як позичена в {name}.",
+    "Accept": "Прийняти",
+    "Accept {name}’s offer": "Прийняти пропозицію {name}",
+    "Decline": "Відхилити",
+    "Decline {name}’s offer": "Відхилити пропозицію {name}",
+    "Ask to borrow cards": "Попросити карти",
+    "Nobody is looking for anything": "Ніхто нічого не шукає",
+    "Need a card for a deck? Ask here, and the people you’ve traded with can offer to lend it.":
+        "Потрібна карта для колоди? Попросіть тут, і люди, з якими ви мінялися, зможуть її запропонувати.",
+    "Looking for some cards?": "Шукаєте карти?",
+    "Add the cards you’d like to borrow. People you’ve traded with see them under Looking for and can offer to lend them; when you accept an offer, it becomes a loan in both your ledgers.":
+        "Додайте карти, які хочете позичити. Люди, з якими ви мінялися, побачать їх у розділі «Шукають» і зможуть запропонувати свої; коли ви приймете пропозицію, вона стане позикою в обліку у вас обох.",
+    "Your request": "Ваш запит",
+    "People you’ve traded with will see these under Looking for.": "Їх побачать у розділі «Шукають» люди, з якими ви мінялися.",
+    "Ask around": "Запитати в друзів",
+    "Offer sent. {name} will see it.": "Пропозицію надіслано. {name} її побачить.",
+    "Removed from your list.": "Прибрано з вашого списку.",
+    "Any version": "Будь-яке видання",
+    "The lender chooses": "Обере той, хто позичає",
+    "Which version can you lend?": "Яке видання можете позичити?",
 
     # relative dates
     "today": "сьогодні",
@@ -254,6 +297,12 @@ UK_PLURAL = {
                                      "Видалено {n} повернутих записів."],
     "{n} card missing": ["{n} карта зникла", "{n} карти зникли", "{n} карт зникло"],
     "Add {n} card to Missing": ["Додати {n} карту в розшук", "Додати {n} карти в розшук", "Додати {n} карт у розшук"],
+    "{n} card wanted": ["{n} карта потрібна", "{n} карти потрібні", "{n} карт потрібно"],
+    "{n} offer waiting": ["{n} пропозиція чекає", "{n} пропозиції чекають", "{n} пропозицій чекають"],
+    "Ask for {n} card": ["Попросити {n} карту", "Попросити {n} карти", "Попросити {n} карт"],
+    "Added {n} card to your list.": ["Додано {n} карту до вашого списку.", "Додано {n} карти до вашого списку.",
+                                     "Додано {n} карт до вашого списку."],
+    "Added {n} card.": ["Додано {n} карту.", "Додано {n} карти.", "Додано {n} карт."],
     "Added {n} card to Missing.": ["Додано {n} карту в розшук.", "Додано {n} карти в розшук.", "Додано {n} карт у розшук."],
 }
 

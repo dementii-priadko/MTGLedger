@@ -17,6 +17,9 @@ PRINTINGS = {
     "bolt-m10": {"object": "card", "id": "bolt-m10", "name": "Lightning Bolt", "set": "m10",
                  "set_name": "Magic 2010", "collector_number": "146", "finishes": ["nonfoil", "foil"],
                  "image_uris": {"normal": "https://img/bolt.jpg"}},
+    "bolt-2xm": {"object": "card", "id": "bolt-2xm", "name": "Lightning Bolt", "set": "2xm",
+                 "set_name": "Double Masters", "collector_number": "129", "finishes": ["nonfoil", "foil"],
+                 "image_uris": {"normal": "https://img/bolt2.jpg"}},
     "sol-ring-cmm": {"object": "card", "id": "sol-ring-cmm", "name": "Sol Ring", "set": "cmm",
                      "set_name": "Commander Masters", "collector_number": "410",
                      "finishes": ["nonfoil", "foil", "etched"],
@@ -27,7 +30,7 @@ PRINTINGS = {
 @pytest.fixture(autouse=True)
 def clean_db():
     with psycopg.connect(ledger.DATABASE_URL) as db:
-        db.execute("TRUNCATE loans, missing_cards, contacts, cards, users RESTART IDENTITY CASCADE")
+        db.execute("TRUNCATE loans, missing_cards, wanted_offers, wanted_cards, contacts, cards, users RESTART IDENTITY CASCADE")
     yield
 
 
