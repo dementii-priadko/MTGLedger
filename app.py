@@ -118,7 +118,15 @@ def merge_users(db, keep_id, drop_id):
     db.execute("UPDATE loans SET lender_id = %s WHERE lender_id = %s", (keep_id, drop_id))
     db.execute("UPDATE loans SET borrower_id = %s WHERE borrower_id = %s", (keep_id, drop_id))
     db.execute("UPDATE loans SET created_by = %s WHERE created_by = %s", (keep_id, drop_id))
-    db.execute("DELETE FROM users WHERE id = %s", (drop_id,))
+    db.execute(
+        """INSERT INTO contacts (user_id, contact_id, hidden)
+           SELECT CASE WHEN user_id = %(drop)s THEN %(keep)s ELSE user_id END,
+                  CASE WHEN contact_id = %(drop)s THEN %(keep)s ELSE contact_id END, hidden
+           FROM contacts WHERE %(drop)s IN (user_id, contact_id) AND %(keep)s NOT IN (user_id, contact_id)
+           ON CONFLICT DO NOTHING""",
+        {"keep": keep_id, "drop": drop_id},
+    )
+    db.execute("DELETE FROM users WHERE id = %s", (drop_id,))  # its own contacts rows cascade
 
 
 def upsert_telegram_user(tg):
@@ -538,6 +546,12 @@ def get_or_create_user_by_username(username):
     return db.execute("INSERT INTO users (username) VALUES (%s) RETURNING id", (username,)).fetchone()["id"]
 
 
+def add_contacts(db, a, b):
+    """Record that two people traded (both directions), so they see each other's Missing cards."""
+    db.execute("INSERT INTO contacts (user_id, contact_id) VALUES (%s, %s), (%s, %s) ON CONFLICT DO NOTHING",
+               (a, b, b, a))
+
+
 LOAN_SELECT = """
     SELECT l.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
            lu.username AS lender_username, lu.first_name AS lender_first_name, lu.photo_url AS lender_photo_url,
@@ -719,11 +733,12 @@ def new_loan():
         other = form.get("other", "").strip().lstrip("@")
         lines, error = parse_cart(form)
 
-        if direction not in ("lent", "borrowed"):
+        # "missing": lent out to someone, but who? Goes on the Missing board instead of the ledger.
+        if direction not in ("lent", "borrowed", "missing"):
             error = _("Choose whether you lent or borrowed the cards.")
-        elif not USERNAME_RE.match(other):
+        elif direction != "missing" and not USERNAME_RE.match(other):
             error = _("Enter the other person's Telegram @username.")
-        elif g.user["username"] and other.lower() == g.user["username"].lower():
+        elif direction != "missing" and g.user["username"] and other.lower() == g.user["username"].lower():
             error = _("You can't lend cards to yourself.")
 
         if error is None:
@@ -731,6 +746,18 @@ def new_loan():
                 card_ids = get_or_create_mtg_cards([(sid, finish) for sid, finish, _ in lines])
             except ValueError as e:
                 error = str(e)
+
+        if error is None and direction == "missing":
+            with db.cursor() as cur:
+                cur.executemany(
+                    """INSERT INTO missing_cards (card_id, owner_id, quantity) VALUES (%s, %s, %s)
+                       ON CONFLICT (owner_id, card_id) DO UPDATE SET quantity = missing_cards.quantity + EXCLUDED.quantity""",
+                    [(card_id, g.user["id"], qty) for card_id, (_, _, qty) in zip(card_ids, lines)],
+                )
+            db.commit()
+            total = sum(qty for _, _, qty in lines)
+            flash(_n("Added {n} card to Missing.", "Added {n} cards to Missing.", total), "ok")
+            return redirect(url_for("missing"))
 
         if error is None:
             other_id = get_or_create_user_by_username(other)
@@ -744,6 +771,7 @@ def new_loan():
                     [(card_id, lender, borrower, qty, me, batch_id)
                      for card_id, (_, _, qty) in zip(card_ids, lines)],
                 )
+            add_contacts(db, lender, borrower)
             db.commit()
             total = sum(qty for _, _, qty in lines)
             flash(_n("Loan recorded: {n} card.", "Loan recorded: {n} cards.", total), "ok")
@@ -761,6 +789,121 @@ def new_loan():
     ).fetchall()
     prefill = request.form if request.method == "POST" else request.args
     return render_template("new_loan.html", people=people, finishes=FINISHES, prefill=prefill)
+
+
+# --- missing board ------------------------------------------------------------------
+
+@app.route("/missing")
+@login_required
+def missing():
+    """Lost-track-of cards of you and the people you've traded with (minus those you hid), grouped by owner
+    (yours first), so they can check whether they have one."""
+    db, me = get_db(), g.user["id"]
+    rows = db.execute(
+        """SELECT m.*, c.name AS card_name, c.set_code, c.set_name, c.collector_number, c.image_url, c.finish,
+                  u.username, u.first_name, u.photo_url
+           FROM missing_cards m JOIN cards c ON c.id = m.card_id JOIN users u ON u.id = m.owner_id
+           WHERE m.owner_id = %(me)s
+              OR m.owner_id IN (SELECT contact_id FROM contacts WHERE user_id = %(me)s AND NOT hidden)
+           ORDER BY m.created_at DESC""",
+        {"me": me},
+    ).fetchall()
+    groups = {}
+    for row in rows:
+        group = groups.setdefault(row["owner_id"], {
+            "id": row["owner_id"], "username": row["username"], "first_name": row["first_name"],
+            "photo_url": row["photo_url"], "cards": [], "total": 0,
+        })
+        group["cards"].append(row)
+        group["total"] += row["quantity"]
+    ordered = sorted(groups.values(), key=lambda grp: (grp["id"] != me, -grp["total"]))
+    hidden = db.execute(
+        """SELECT u.id, u.username, u.first_name FROM contacts c JOIN users u ON u.id = c.contact_id
+           WHERE c.user_id = %s AND c.hidden ORDER BY lower(COALESCE(u.username, u.first_name))""",
+        (me,),
+    ).fetchall()
+    return render_template("missing.html", groups=ordered, hidden=hidden, finishes=FINISHES)
+
+
+def visible_to_me(owner_id):
+    """Whether the viewer sees this owner's Missing cards (a contact they haven't hidden)."""
+    return get_db().execute(
+        "SELECT 1 FROM contacts WHERE user_id = %s AND contact_id = %s AND NOT hidden", (g.user["id"], owner_id)
+    ).fetchone() is not None
+
+
+def take_missing(missing_id, requested):
+    """Lock a Missing-board row and take `requested` copies off it (None = all); returns (row, quantity taken)."""
+    db = get_db()
+    row = db.execute(
+        """SELECT m.*, c.name AS card_name, u.username, u.first_name
+           FROM missing_cards m JOIN cards c ON c.id = m.card_id JOIN users u ON u.id = m.owner_id
+           WHERE m.id = %s FOR UPDATE OF m""",
+        (missing_id,),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    qty = row["quantity"] if requested is None else max(1, min(requested, row["quantity"]))
+    if qty == row["quantity"]:
+        db.execute("DELETE FROM missing_cards WHERE id = %s", (missing_id,))
+    else:
+        db.execute("UPDATE missing_cards SET quantity = quantity - %s WHERE id = %s", (qty, missing_id))
+    return row, qty
+
+
+@app.route("/missing/<int:missing_id>/claim", methods=["POST"])
+@login_required
+def claim_missing(missing_id):
+    """"It's with me": the card moves off the board into both ledgers, borrowed by the viewer from its owner."""
+    row, qty = take_missing(missing_id, parse_quantity(request.form.get("quantity")))
+    me = g.user["id"]
+    if row["owner_id"] == me:
+        get_db().rollback()
+        abort(400)
+    if not visible_to_me(row["owner_id"]):
+        get_db().rollback()
+        abort(404)
+    db = get_db()
+    db.execute(
+        """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by, batch_id)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (row["card_id"], row["owner_id"], me, qty, me, uuid.uuid4()),
+    )
+    db.commit()
+    flash(_("{card} from {name} is now in your ledger.", card=row["card_name"],
+            name=person(row["username"], row["first_name"])), "ok")
+    return back_or_index()
+
+
+@app.route("/missing/<int:missing_id>/found", methods=["POST"])
+@login_required
+def found_missing(missing_id):
+    """The owner found it (or remembered who has it): take it off the board."""
+    row, _qty = take_missing(missing_id, parse_quantity(request.form.get("quantity")))
+    if row["owner_id"] != g.user["id"]:
+        get_db().rollback()
+        abort(403)
+    get_db().commit()
+    flash(_("Removed from Missing."), "ok")
+    return back_or_index()
+
+
+@app.route("/missing/people/<int:person_id>/<any(hide, show):action>", methods=["POST"])
+@login_required
+def toggle_missing_person(person_id, action):
+    """Stop (or start again) seeing one contact's cards on the Missing board."""
+    db = get_db()
+    row = db.execute(
+        """UPDATE contacts SET hidden = %s WHERE user_id = %s AND contact_id = %s
+           RETURNING (SELECT COALESCE('@' || username, first_name) FROM users WHERE id = contact_id) AS name""",
+        (action == "hide", g.user["id"], person_id),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    db.commit()
+    if action == "hide":
+        flash(_("You won’t see {name}’s missing cards any more.", name=row["name"]), "ok")
+    return back_or_index()
 
 
 def own_loan_or_404(loan_id):

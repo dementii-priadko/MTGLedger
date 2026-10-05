@@ -21,7 +21,7 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
 | `schema.sql` | Database schema, applied on every app start (must stay idempotent) |
 | `i18n.py` | Translation catalog (English keys → Ukrainian) and plural rules |
 | `backup.py` | Daily CSV backup of active loans, sent via the Telegram bot (separate compose service) |
-| `templates/` | `base.html` layout; `index.html` home; `person.html` one person; `new_loan.html`; `login.html`; `_macros.html` shared tile/dialog/action macros (import `with context`) |
+| `templates/` | `base.html` layout; `index.html` home; `person.html` one person; `new_loan.html` (also reports missing cards); `missing.html` the Missing board; `login.html`; `_macros.html` shared tile/dialog/action macros (import `with context`) |
 | `static/` | `style.css` (all styles, light/dark tokens), `ledger.js` (home + person page), `new_loan.js` (loan form), `og-image.png` (link preview) |
 | `tests/` | pytest suite against a real Postgres; Scryfall is faked |
 | `docker-compose.yml` | `db` (Postgres), `app` (gunicorn), `backup` (daily job) |
@@ -38,6 +38,14 @@ no ORM), vanilla JS/CSS (no build step), Docker Compose, gunicorn. Card data com
   `status` (`borrowed`/`returned`), `created_at`, `returned_at`, `created_by`, plus:
   - `batch_id`: rows recorded together in one "loan" share it.
   - `hidden_by_lender` / `hidden_by_borrower`: per-side "deleted from my ledger" flags for *returned* rows.
+- **missing_cards**: the *Missing* board (`/missing`): cards the owner lent out but lost track of, one row per
+  owner + card (re-reporting adds to `quantity`). Reported through the loan form with `direction=missing`. You see
+  your own cards plus those of your **contacts** you haven't hidden. A contact can claim copies ("It's with me"),
+  which moves them into a normal loan (owner → claimer, created by the claimer); only the owner can mark them
+  found. Partial claims/finds decrement the row (`take_missing`).
+- **contacts**: who has traded with whom, one row per direction (`add_contacts` on every new loan; backfilled
+  from `loans` in `schema.sql`). Rows outlive cleared loans. `hidden` is per side: the user stopped seeing that
+  person's Missing cards. Placeholder merges carry contacts over (`merge_users`).
 
 ### Invariants and rules (keep these when changing behavior)
 

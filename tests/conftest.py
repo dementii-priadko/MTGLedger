@@ -27,7 +27,7 @@ PRINTINGS = {
 @pytest.fixture(autouse=True)
 def clean_db():
     with psycopg.connect(ledger.DATABASE_URL) as db:
-        db.execute("TRUNCATE loans, cards, users RESTART IDENTITY CASCADE")
+        db.execute("TRUNCATE loans, missing_cards, contacts, cards, users RESTART IDENTITY CASCADE")
     yield
 
 

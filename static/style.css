@@ -118,6 +118,8 @@ svg { flex: none; }
 }
 .topbar-inner { max-width: 1120px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
+.btn-nav { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-nav:hover, .btn-nav[aria-current] { color: var(--text); background: var(--surface-2); }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: .02em; text-decoration: none !important; }
 .brand-mark { width: 26px; height: 26px; }
 .brand-mark rect:first-child { fill: var(--accent); }
@@ -256,6 +258,12 @@ input:focus, .input-prefix:focus-within { border-color: var(--accent); box-shado
 .pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 99px; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill-lent { background: var(--lent-soft); color: var(--lent); }
 .pill-borrowed { background: var(--borrowed-soft); color: var(--borrowed); }
+.pill-missing { background: var(--accent-soft); color: var(--accent); }
+.person-static:hover strong { text-decoration: none; }
+.hidden-people { margin-top: 28px; }
+.hidden-people ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.hidden-people li { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 14px; }
+.hidden-people form { margin: 0; }
 
 /* ---------- card tiles ---------- */
 .card-grid { display: flex; flex-wrap: wrap; gap: 18px 16px; }
@@ -365,6 +373,7 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--lent); mar
 .back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .back:hover { color: var(--text); text-decoration: none; }
 .page-title { font-family: var(--font-display); font-size: 30px; margin-bottom: 22px; letter-spacing: .01em; }
+.page-lead { max-width: 640px; margin: -12px 0 22px; }
 
 .loan-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
 .loan-steps { display: grid; gap: 16px; }
@@ -531,8 +540,8 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--lent); mar
 }
 @media (max-width: 600px) {
   .container { padding-top: 16px; }
-  .topbar-actions .btn-primary span, .hide-sm { display: none; }
-  .topbar-actions .btn-primary { width: 38px; padding: 0; }
+  .topbar-actions .btn-primary span, .topbar-actions .btn-nav span, .hide-sm { display: none; }
+  .topbar-actions .btn-primary, .topbar-actions .btn-nav { width: 38px; padding: 0; }
   .summary { gap: 10px; }
   .stat { padding: 14px; }
   .stat-value { font-size: 30px; }

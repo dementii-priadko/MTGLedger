@@ -52,3 +52,28 @@ CREATE INDEX IF NOT EXISTS loans_batch ON loans (batch_id);
 -- Each side can clear settled (returned) records from their own view; a row both sides cleared is deleted.
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_lender BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_borrower BOOLEAN NOT NULL DEFAULT false;
+
+-- The Missing board: cards someone lent out but lost track of, visible to every user. Whoever turns out
+-- to have one claims it, which turns it into a loan.
+CREATE TABLE IF NOT EXISTS missing_cards (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    card_id    BIGINT NOT NULL REFERENCES cards(id),
+    owner_id   BIGINT NOT NULL REFERENCES users(id),
+    quantity   INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (owner_id, card_id)
+);
+
+-- Who has traded with whom: one row per direction, added whenever a loan is recorded and kept after the
+-- loans are cleared. Decides whose Missing cards you see; `hidden` = you chose to stop seeing that person's.
+CREATE TABLE IF NOT EXISTS contacts (
+    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    contact_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hidden     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (user_id, contact_id),
+    CHECK (user_id <> contact_id)
+);
+-- Backfill from the ledger (a no-op once everything is in).
+INSERT INTO contacts (user_id, contact_id)
+SELECT lender_id, borrower_id FROM loans UNION SELECT borrower_id, lender_id FROM loans
+ON CONFLICT DO NOTHING;

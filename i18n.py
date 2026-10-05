@@ -194,6 +194,37 @@ UK = {
     "Enter the other person's Telegram @username.": "Введіть Telegram @ім’я іншої людини.",
     "You can't lend cards to yourself.": "Не можна позичати карти самому собі.",
 
+    # missing board
+    "Missing": "Розшук",
+    "Cards friends lost track of": "Карти, яких друзі не можуть знайти",
+    "Missing cards": "Зниклі карти",
+    "Cards that people you’ve traded with lent out and lost track of. If one of them is with you, press “{button}”: it moves into your ledger as borrowed from its owner.":
+        "Карти, які люди, з якими ви мінялися, комусь позичили й забули кому. Якщо одна з них у вас, натисніть «{button}» — вона з’явиться у вашому обліку як позичена в її власника.",
+    "Report missing cards": "Додати зниклі карти",
+    "You": "Ви",
+    "It’s with me": "Вона в мене",
+    "How many do you have?": "Скільки у вас?",
+    "Record that you have {name}’s {card}? It goes into both your ledgers as borrowed from {name}.":
+        "Записати, що {card} від {name} у вас? Карта з’явиться в обліку у вас обох як позичена в {name}.",
+    "Found it": "Знайшлася",
+    "How many turned up?": "Скільки знайшлося?",
+    "Remove from Missing": "Прибрати з розшуку",
+    "Nothing is missing": "Нічого не зникло",
+    "Lent a card and can’t remember to whom? Add it here so the people you’ve traded with can check whether it’s with them.":
+        "Позичили карту й не пам’ятаєте кому? Додайте її сюди, щоб люди, з якими ви мінялися, перевірили, чи не в них вона.",
+    "Lost track of some cards?": "Забули, кому віддали карти?",
+    "Add the cards you lent out but can’t remember to whom. People you’ve traded with see them on the Missing board, and whoever has one can mark it: it then becomes a loan in both your ledgers.":
+        "Додайте карти, які ви комусь позичили, але не пам’ятаєте кому. Їх побачать у розшуку люди, з якими ви мінялися, і той, у кого карта, зможе її позначити — тоді вона стане позикою в обліку у вас обох.",
+    "Add to list": "Додати до списку",
+    "People you’ve traded with will see these on the Missing board.": "Їх побачать у розшуку люди, з якими ви мінялися.",
+    "Add to Missing": "Додати в розшук",
+    "{card} from {name} is now in your ledger.": "{card} від {name} тепер у вашому обліку.",
+    "Removed from Missing.": "Прибрано з розшуку.",
+    "Hide {name}’s cards": "Приховати карти {name}",
+    "You won’t see {name}’s missing cards any more.": "Ви більше не бачитимете зниклих карт {name}.",
+    "Hidden people": "Приховані люди",
+    "Show again": "Показувати знову",
+
     # relative dates
     "today": "сьогодні",
     "yesterday": "вчора",
@@ -221,6 +252,9 @@ UK_PLURAL = {
                                    "Видалити {n} повернутих записів"],
     "Deleted {n} returned record.": ["Видалено {n} повернутий запис.", "Видалено {n} повернуті записи.",
                                      "Видалено {n} повернутих записів."],
+    "{n} card missing": ["{n} карта зникла", "{n} карти зникли", "{n} карт зникло"],
+    "Add {n} card to Missing": ["Додати {n} карту в розшук", "Додати {n} карти в розшук", "Додати {n} карт у розшук"],
+    "Added {n} card to Missing.": ["Додано {n} карту в розшук.", "Додано {n} карти в розшук.", "Додано {n} карт у розшук."],
 }
 
 CATALOGS = {"uk": UK}

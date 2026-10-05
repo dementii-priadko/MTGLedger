@@ -35,6 +35,7 @@
     return uris[size] || uris.normal;
   };
   const direction = () => form.querySelector("[name=direction]:checked").value;
+  const missing = direction() === "missing";  // reporting cards for the Missing board: no "who"
   const pickFinish = () => form.querySelector("[name=pick_finish]:checked")?.value;
   const el = (tag, props = {}, ...children) => {
     const node = Object.assign(document.createElement(tag), props);
@@ -45,13 +46,14 @@
   // --- who --------------------------------------------------------------------
 
   function syncWho() {
+    if (missing) return;
     $("other-label").textContent = direction() === "lent" ? t("Lent to") : t("Borrowed from");
     const who = USERNAME_RE.test(other.value) ? `@${other.value}` : "…";
     $("cart-who").textContent = direction() === "lent" ? t("Lending to {who}", { who }) : t("Borrowing from {who}", { who });
   }
   form.querySelectorAll("[name=direction]").forEach((r) => r.addEventListener("change", syncWho));
 
-  other.addEventListener("input", () => {
+  other?.addEventListener("input", () => {
     other.value = other.value.replace(/^@+/, "");
     clearError(other);
     highlightChip();
@@ -66,6 +68,7 @@
     })
   );
   function highlightChip() {
+    if (missing) return;
     document.querySelectorAll(".chip").forEach((c) =>
       c.classList.toggle("active", c.dataset.username.toLowerCase() === other.value.toLowerCase())
     );
@@ -314,7 +317,9 @@
     const total = cart.reduce((n, c) => n + c.qty, 0);
     $("cart-count").textContent = tn("{n} card", "{n} cards", total);
     $("cart-empty").hidden = cart.length > 0;
-    $("submit").textContent = total > 1 ? tn("Record loan · {n} card", "Record loan · {n} cards", total) : t("Record loan");
+    $("submit").textContent = missing
+      ? (total > 1 ? tn("Add {n} card to Missing", "Add {n} cards to Missing", total) : t("Add to Missing"))
+      : (total > 1 ? tn("Record loan · {n} card", "Record loan · {n} cards", total) : t("Record loan"));
 
     // Hidden fields the server reads (one triple per line), plus display data to restore the list after an error.
     $("cart-inputs").replaceChildren(
@@ -371,12 +376,12 @@
     // A card that's picked but not yet added counts too, so single-card loans need no extra click.
     if (selected) addSelected();
     let firstBad = null;
-    if (!USERNAME_RE.test(other.value)) {
+    if (!missing && !USERNAME_RE.test(other.value)) {
       showError(other, t("Enter their Telegram username (letters, numbers, underscores)."));
       firstBad ||= other;
     }
     if (!cart.length) {
-      showCartError(t("Add at least one card to the loan."));
+      showCartError(missing ? t("Add at least one card.") : t("Add at least one card to the loan."));
       firstBad ||= nameInput;
     }
     if (firstBad) {

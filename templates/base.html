@@ -40,6 +40,11 @@
         <span>Card Ledger</span>
       </a>
       <nav class="topbar-actions">
+        <a href="{{ url_for('missing') }}" class="btn btn-nav" title="{{ _("Cards friends lost track of") }}"
+           {% if request.endpoint == 'missing' %}aria-current="page"{% endif %}>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4M7.6 7.4a1.5 1.5 0 1 1 1.9 1.5c-.4.1-.5.4-.5.8M9 11.4v.1"/></svg>
+          <span>{{ _("Missing") }}</span>
+        </a>
         <a href="{{ url_for('new_loan') }}" class="btn btn-primary">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
           <span>{{ _("New loan") }}</span>

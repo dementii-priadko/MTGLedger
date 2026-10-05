@@ -1,13 +1,22 @@
 {% extends "base.html" %}
-{% block title %}{{ _("New loan") }} · Card Ledger{% endblock %}
+{# direction=missing: the same card picker, but the cards go on the Missing board instead of to a person. #}
+{% set missing = prefill.get('direction') == 'missing' %}
+{% block title %}{{ _("Report missing cards") if missing else _("New loan") }} · Card Ledger{% endblock %}
 {% block content %}
-<a class="back" href="{{ url_for('index') }}">
-  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4l-6 6 6 6"/></svg>{{ _("Ledger") }}
+<a class="back" href="{{ url_for('missing') if missing else url_for('index') }}">
+  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4l-6 6 6 6"/></svg>{{ _("Missing") if missing else _("Ledger") }}
 </a>
-<h1 class="page-title">{{ _("Record a loan") }}</h1>
+<h1 class="page-title">{{ _("Report missing cards") if missing else _("Record a loan") }}</h1>
 
 <form method="post" class="loan-layout" id="loan-form" novalidate>
   <div class="loan-steps">
+    {% if missing %}
+    <section class="step">
+      <h2 class="step-title"><span class="step-num">1</span>{{ _("Lost track of some cards?") }}</h2>
+      <p class="muted">{{ _("Add the cards you lent out but can’t remember to whom. People you’ve traded with see them on the Missing board, and whoever has one can mark it: it then becomes a loan in both your ledgers.") }}</p>
+      <input type="radio" name="direction" value="missing" checked hidden>
+    </section>
+    {% else %}
     <section class="step">
       <h2 class="step-title"><span class="step-num">1</span>{{ _("Who?") }}</h2>
       <div class="segmented" role="radiogroup" aria-label="{{ _("Direction") }}">
@@ -37,6 +46,7 @@
         </div>
       {% endif %}
     </section>
+    {% endif %}
 
     <section class="step" id="picker">
       <h2 class="step-title"><span class="step-num">2</span>{{ _("Add cards") }}</h2>
@@ -72,7 +82,7 @@
               </div>
             </div>
             <button type="button" class="btn btn-add" id="add-card">
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>{{ _("Add to loan") }}
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>{{ _("Add to list") if missing else _("Add to loan") }}
             </button>
           </div>
         </div>
@@ -91,19 +101,19 @@
 
   <aside class="cart" aria-labelledby="cart-title">
     <div class="cart-head">
-      <h2 id="cart-title">{{ _("This loan") }}</h2>
+      <h2 id="cart-title">{{ _("Missing cards") if missing else _("This loan") }}</h2>
       <span class="pill" id="cart-count">{{ _n("{n} card", "{n} cards", 0) }}</span>
     </div>
-    <p class="cart-who muted" id="cart-who"></p>
+    <p class="cart-who muted" id="cart-who">{% if missing %}{{ _("People you’ve traded with will see these on the Missing board.") }}{% endif %}</p>
     <ul class="cart-list" id="cart-list"></ul>
     <div class="cart-empty" id="cart-empty">
       <div class="empty-art" aria-hidden="true"><span></span><span></span><span></span></div>
-      <p class="muted">{{ _("Search for a card, pick its edition and press “{button}”. Add as many as you like.", button=_("Add to loan")) }}</p>
+      <p class="muted">{{ _("Search for a card, pick its edition and press “{button}”. Add as many as you like.", button=_("Add to list") if missing else _("Add to loan")) }}</p>
     </div>
     <p class="field-error" id="cart-error" hidden></p>
     <div id="cart-inputs"></div>
     <input type="hidden" name="cart_json" id="cart-json" value="{{ prefill.get('cart_json', '') }}">
-    <button type="submit" class="btn btn-primary btn-lg btn-block" id="submit">{{ _("Record loan") }}</button>
+    <button type="submit" class="btn btn-primary btn-lg btn-block" id="submit">{{ _("Add to Missing") if missing else _("Record loan") }}</button>
   </aside>
 </form>
 {% endblock %}
