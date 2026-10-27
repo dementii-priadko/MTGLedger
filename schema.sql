@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS loans_batch ON loans (batch_id);
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_lender BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS hidden_by_borrower BOOLEAN NOT NULL DEFAULT false;
 
--- The Missing board: cards someone lent out but lost track of, visible to every user. Whoever turns out
+-- The Missing board: cards someone lent out but lost track of, shown to their contacts. Whoever turns out
 -- to have one claims it, which turns it into a loan.
 CREATE TABLE IF NOT EXISTS missing_cards (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

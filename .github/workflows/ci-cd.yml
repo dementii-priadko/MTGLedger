@@ -46,7 +46,7 @@ jobs:
       group: production
       cancel-in-progress: false
     env:
-      DEPLOY_HOST: 95.217.157.7
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
       DEPLOY_PATH: /opt/ledger.beznadijka.dev
     steps:
       - uses: actions/checkout@v4

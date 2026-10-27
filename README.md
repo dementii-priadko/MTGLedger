@@ -57,6 +57,7 @@ then deploy to https://ledger.beznadijka.dev: the code is rsynced to `/opt/ledge
 server and `docker compose -p ledger up -d --build` is run there. The server's `.env` is never touched.
 
 Required repository secrets:
+- `DEPLOY_HOST`: the server's address
 - `DEPLOY_SSH_KEY`: private SSH key authorized for root on the server
 - `DEPLOY_KNOWN_HOSTS`: the server's host key line(s), so the runner can verify it
 

@@ -8,13 +8,21 @@ import re
 import secrets
 import ssl
 import time
-from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+
+import psycopg
+from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from psycopg.rows import dict_row
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+import backup
+import i18n
 
 try:
     import certifi
@@ -22,38 +30,26 @@ try:
 except ImportError:
     SSL_CONTEXT = ssl.create_default_context()
 
-import i18n
-import psycopg
-from psycopg.rows import dict_row
-from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
-from urllib.parse import urlsplit
-
-from werkzeug.middleware.proxy_fix import ProxyFix
-
 BASE_DIR = Path(__file__).parent
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://ledger:ledger@localhost:5433/ledger")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
-DEV_LOGIN = os.environ.get("DEV_LOGIN") == "1"
-AUTH_MAX_AGE = 3600  # reject Telegram auth payloads older than this (they end up in logs/history)
-# Bot login: "Log in with Telegram" opens the bot, which replies with a signed link to /auth/telegram.
-# Needs the bot's webhook (registered at startup when PUBLIC_URL and the secret are set).
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 BOT_LOGIN = bool(BOT_TOKEN and BOT_USERNAME and WEBHOOK_SECRET)
-
-log = logging.getLogger("ledger")
+DEV_LOGIN = os.environ.get("DEV_LOGIN") == "1"
+ADMIN_TELEGRAM_IDS = {int(x) for x in os.environ.get("ADMIN_TELEGRAM_IDS", "").replace(" ", "").split(",")
+                      if x.lstrip("-").isdigit()}
+AUTH_MAX_AGE = 3600  # auth payloads end up in browser history and logs
 
 FINISHES = {"nonfoil": "Non-foil", "foil": "Foil", "etched": "Etched foil"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 MAX_CARDS_PER_LOAN = 50
-# Telegram ids allowed into /admin (comma-separated).
-ADMIN_TELEGRAM_IDS = {int(x) for x in os.environ.get("ADMIN_TELEGRAM_IDS", "").replace(" ", "").split(",")
-                      if x.lstrip("-").isdigit()}
+
+log = logging.getLogger("ledger")
 
 app = Flask(__name__)
-# Behind nginx: trust X-Forwarded-Proto so external URLs (Telegram auth URL, og: tags) use https.
-# Not X-Forwarded-Host: nginx doesn't set it, so it would be attacker-controlled.
+# Only X-Forwarded-Proto: nginx doesn't set X-Forwarded-Host, so trusting it would let clients spoof it.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY") or os.urandom(32),
@@ -63,7 +59,7 @@ app.config.update(
 )
 
 
-# --- database ---------------------------------------------------------------
+# --- database ---
 
 def get_db():
     if "db" not in g:
@@ -80,32 +76,30 @@ def close_db(_exc):
 
 def init_db():
     with psycopg.connect(DATABASE_URL) as db:
-        # Serialize schema setup when several workers start at once.
+        # Gunicorn workers all start at once.
         db.execute("SELECT pg_advisory_xact_lock(hashtext('tcg-ledger schema'))")
         db.execute((BASE_DIR / "schema.sql").read_text())
 
 
-# --- auth -------------------------------------------------------------------
+# --- auth ---
 
 def telegram_auth_hash(data):
-    """The Login Widget signature: HMAC-SHA256 of the sorted key=value lines, keyed by SHA256(bot token)."""
     check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data))
     secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
     return hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
 
 
 def safe_path(path):
-    """A same-site path to redirect to after login, or None."""
     if isinstance(path, str) and path.startswith("/") and not path.startswith(("//", "/\\")) and "\\" not in path:
         return path
     return None
 
 
 def verify_telegram_auth(data):
-    """Check a Telegram Login Widget payload, per https://core.telegram.org/widgets/login#checking-authorization"""
+    # https://core.telegram.org/widgets/login#checking-authorization
     data = dict(data)
     received_hash = data.pop("hash", "")
-    data.pop("redirect", None)  # ours, not Telegram's: not signed (it's limited to same-site paths instead)
+    data.pop("redirect", None)  # added by us, so unsigned; safe_path limits it instead
     if not BOT_TOKEN or not received_hash:
         return False
     if not hmac.compare_digest(telegram_auth_hash(data), received_hash):
@@ -117,7 +111,7 @@ def verify_telegram_auth(data):
 
 
 def merge_users(db, keep_id, drop_id):
-    """Move everything owned by placeholder `drop_id` onto `keep_id`, then delete it."""
+    """Move placeholder `drop_id`'s loans and contacts onto `keep_id`, then delete it."""
     db.execute("UPDATE loans SET lender_id = %s WHERE lender_id = %s", (keep_id, drop_id))
     db.execute("UPDATE loans SET borrower_id = %s WHERE borrower_id = %s", (keep_id, drop_id))
     db.execute("UPDATE loans SET created_by = %s WHERE created_by = %s", (keep_id, drop_id))
@@ -133,7 +127,6 @@ def merge_users(db, keep_id, drop_id):
 
 
 def upsert_telegram_user(tg):
-    """Create or update the user for a verified Telegram identity; returns users.id."""
     db = get_db()
     tg_id = int(tg["id"])
     username = tg.get("username") or None
@@ -147,7 +140,6 @@ def upsert_telegram_user(tg):
         ).fetchone()
 
     if user is None and placeholder is not None:
-        # First login of someone who was already recorded by @username: claim it.
         user_id = placeholder["id"]
         db.execute("UPDATE users SET telegram_id = %s WHERE id = %s", (tg_id, user_id))
     elif user is None:
@@ -155,14 +147,14 @@ def upsert_telegram_user(tg):
     else:
         user_id = user["id"]
         if placeholder is not None:
-            # Known user changed their @username to one somebody had pre-registered.
+            # They switched to a @username someone had already recorded loans under.
             merge_users(db, user_id, placeholder["id"])
 
     if username:
-        # Another real account may still hold this username (they renamed since); release it.
+        # Telegram usernames get reused; whoever had it before must have renamed.
         db.execute("UPDATE users SET username = NULL WHERE lower(username) = lower(%s) AND id <> %s", (username, user_id))
     db.execute(
-        # Bot logins carry no photo, so keep the one we have.
+        # Bot logins carry no photo.
         "UPDATE users SET username = %s, first_name = %s, last_name = %s, photo_url = COALESCE(%s, photo_url) "
         "WHERE id = %s",
         (username, *profile, user_id),
@@ -175,7 +167,7 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if g.user is None:
-            # Remember where they were going (GET pages only) so the bot login can bring them back.
+            # So the bot login can bring them back here.
             wanted = request.full_path.rstrip("?") if request.method == "GET" and request.path != "/" else None
             return redirect(url_for("login", next=wanted))
         return view(*args, **kwargs)
@@ -187,7 +179,7 @@ def is_admin(user):
 
 
 def admin_required(view):
-    """Admins only; everyone else gets a 404 so the page's existence isn't revealed."""
+    # 404 rather than 403: don't advertise that /admin exists.
     @wraps(view)
     @login_required
     def wrapped(*args, **kwargs):
@@ -197,18 +189,16 @@ def admin_required(view):
     return wrapped
 
 
-# --- request hardening -------------------------------------------------------
+# --- request hardening ---
 
 def same_origin(url):
-    """True if `url` points at this site (scheme + host), e.g. an Origin or Referer header."""
-    ours, theirs = urlsplit(request.host_url), urlsplit(url)
+    ours, theirs = urllib.parse.urlsplit(request.host_url), urllib.parse.urlsplit(url)
     return (theirs.scheme, theirs.netloc) == (ours.scheme, ours.netloc)
 
 
 @app.before_request
 def reject_cross_origin_writes():
-    # SameSite=Lax cookies alone don't stop sibling subdomains (same "site"), so check where
-    # state-changing requests come from. Requests without Origin/Referer are allowed.
+    # SameSite=Lax doesn't help against sibling *.beznadijka.dev apps: they count as the same site.
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return
     source = request.headers.get("Origin") or request.headers.get("Referer")
@@ -217,7 +207,6 @@ def reject_cross_origin_writes():
 
 
 def back_or_index():
-    """Redirect to the page the user came from, but only within this site."""
     ref = request.referrer
     return redirect(ref if ref and same_origin(ref) else url_for("index"))
 
@@ -254,7 +243,7 @@ def security_headers(resp):
     return resp
 
 
-# --- localization ------------------------------------------------------------
+# --- localization ---
 
 def _(text, **kwargs):
     return i18n.gettext(g.get("lang", i18n.DEFAULT), text, **kwargs)
@@ -264,12 +253,11 @@ def _n(singular, plural, n, **kwargs):
     return i18n.ngettext(g.get("lang", i18n.DEFAULT), singular, plural, n, **kwargs)
 
 
-app.jinja_env.globals.update(_=_, _n=_n, languages=i18n.LANGUAGES)
+app.jinja_env.globals.update(_=_, _n=_n, languages=i18n.LANGUAGES, is_admin=is_admin)
 
 
 @app.before_request
 def select_language():
-    # An explicit choice (cookie) wins; otherwise follow the browser.
     lang = request.cookies.get("lang")
     if lang not in i18n.LANGUAGES:
         lang = request.accept_languages.best_match(list(i18n.LANGUAGES)) or i18n.DEFAULT
@@ -304,9 +292,8 @@ def load_user():
 def login():
     if g.user is not None:
         return redirect(url_for("index"))
-    # Full-page redirect flow; Telegram returns to /login#tgAuthResult=..., which the widget
-    # script forwards to /auth/telegram. Works where the embedded iframe can't (e.g. Firefox
-    # with third-party cookie isolation).
+    # Fallback for browsers where the widget iframe fails (Firefox's cookie isolation): Telegram sends
+    # the user back to /login#tgAuthResult=..., and the widget script forwards that to /auth/telegram.
     redirect_login_url = None
     if BOT_TOKEN:
         origin = request.host_url.rstrip("/")
@@ -322,13 +309,13 @@ def login():
                            redirect_login_url=redirect_login_url, bot_login_url=bot_login_url)
 
 
-# --- login through the bot -------------------------------------------------------
+# --- login through the bot ---
 
 def bot_login_link(next_path=None):
-    """t.me deep link; the start parameter carries the page to come back to (base64url, Telegram's charset)."""
+    # The start parameter only allows [A-Za-z0-9_-], hence base64url, and is capped at 64 chars.
     path = safe_path(next_path) or "/"
     encoded = base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
-    param = f"login_{encoded}" if len(encoded) <= 58 else "login"   # start parameters are capped at 64 chars
+    param = f"login_{encoded}" if len(encoded) <= 58 else "login"
     return f"https://t.me/{BOT_USERNAME}?start={param}"
 
 
@@ -342,8 +329,7 @@ def decode_start_path(param):
 
 
 def login_button(text, path):
-    """A Telegram login button: Telegram asks "Log in to <domain> as <name>?" and then opens the URL
-    with the user's signed identity appended (same signature as the Login Widget)."""
+    # Telegram appends the signed identity to login_url, same format as the Login Widget.
     base = PUBLIC_URL or request.host_url.rstrip("/")
     return {"text": text, "login_url": {"url": f"{base}{url_for('auth_telegram', redirect=path)}",
                                         "request_write_access": True}}
@@ -361,10 +347,6 @@ def telegram_api(method, **params):
     return result.get("result")
 
 
-def bot_text(lang, text, **kwargs):
-    return i18n.gettext(lang, text, **kwargs)
-
-
 def bot_lang(tg_user):
     return "uk" if (tg_user or {}).get("language_code", "").startswith("uk") else i18n.DEFAULT
 
@@ -377,7 +359,7 @@ def telegram_webhook():
     try:
         handle_bot_update(request.get_json(silent=True) or {})
     except Exception:
-        # Answer 200 anyway so Telegram doesn't retry the same update forever.
+        # Still answer 200, or Telegram keeps redelivering the update.
         log.exception("failed to handle Telegram update")
     return {"ok": True}
 
@@ -386,28 +368,27 @@ def handle_bot_update(update):
     message = update.get("message")
     if not message or message.get("chat", {}).get("type") != "private" or not message.get("from"):
         return
-    user, chat_id = message["from"], message["chat"]["id"]
-    lang = bot_lang(user)
+    chat_id = message["chat"]["id"]
+    lang = bot_lang(message["from"])
     text = (message.get("text") or "").strip()
-    command, _, arg = text.partition(" ")
+    command, _sep, arg = text.partition(" ")
     if command == "/login" or (command == "/start" and arg.startswith("login")):
         telegram_api(
             "sendMessage", chat_id=chat_id,
-            text=bot_text(lang, "Tap the button to log in to Card Ledger."),
-            reply_markup={"inline_keyboard": [[login_button(bot_text(lang, "Log in to Card Ledger"),
+            text=i18n.gettext(lang, "Tap the button to log in to Card Ledger."),
+            reply_markup={"inline_keyboard": [[login_button(i18n.gettext(lang, "Log in to Card Ledger"),
                                                             decode_start_path(arg))]]},
         )
     else:
         telegram_api(
             "sendMessage", chat_id=chat_id,
-            text=bot_text(lang, "Hi! This bot logs you in to Card Ledger. Send /login any time to get a login link."),
-            reply_markup={"inline_keyboard": [[{"text": bot_text(lang, "Open Card Ledger"),
+            text=i18n.gettext(lang, "Hi! This bot logs you in to Card Ledger. Send /login any time to get a login link."),
+            reply_markup={"inline_keyboard": [[{"text": i18n.gettext(lang, "Open Card Ledger"),
                                                 "url": PUBLIC_URL or request.host_url}]]},
         )
 
 
 def register_webhook():
-    """Point the bot's updates at us (production only: needs PUBLIC_URL)."""
     if not (BOT_LOGIN and PUBLIC_URL):
         return
     try:
@@ -426,20 +407,18 @@ def auth_telegram():
     session.clear()
     session["user_id"] = upsert_telegram_user(request.args)
     session.permanent = True
-    # Login buttons from the bot carry the page to return to.
     return redirect(safe_path(request.args.get("redirect")) or url_for("index"))
 
 
 @app.route("/auth/dev", methods=["POST"])
 def auth_dev():
-    """Local-only login that skips Telegram (enabled with DEV_LOGIN=1)."""
     if not DEV_LOGIN:
         abort(404)
     username = request.form.get("username", "").strip().lstrip("@")
     if not USERNAME_RE.match(username):
         flash(_("Enter a valid username."), "error")
         return redirect(url_for("login"))
-    # Deterministic fake Telegram id so the same name logs into the same account.
+    # Same name, same account. Negative so it can't collide with a real Telegram id.
     fake_id = -int(hashlib.sha256(username.lower().encode()).hexdigest()[:12], 16)
     session.clear()
     session["user_id"] = upsert_telegram_user({"id": fake_id, "username": username, "first_name": username})
@@ -452,24 +431,24 @@ def logout():
     return redirect(url_for("login"))
 
 
-# --- scryfall ---------------------------------------------------------------
+# --- scryfall ---
 
 class ScryfallUnavailable(Exception):
     pass
 
 
 def scryfall_cards(scryfall_ids):
-    """Fetch printings by Scryfall id via the collection endpoint; returns {id: card} for those found."""
+    """{id: card} for the ids Scryfall knows; unknown ids are simply left out."""
     ids = []
     for sid in dict.fromkeys(scryfall_ids):
         try:
             parsed = uuid.UUID(sid)
         except ValueError:
-            continue  # not a Scryfall id at all: treat as not found
-        if parsed.version == 4:  # Scryfall ids are v4; it rejects other UUIDs with a 400
+            continue
+        if parsed.version == 4:  # Scryfall 400s the whole request on any other UUID
             ids.append(str(parsed))
     found = {}
-    for i in range(0, len(ids), 75):  # API limit per request
+    for i in range(0, len(ids), 75):  # max identifiers per request
         body = json.dumps({"identifiers": [{"id": sid} for sid in ids[i:i + 75]]}).encode()
         req = urllib.request.Request(
             "https://api.scryfall.com/cards/collection", data=body, method="POST",
@@ -479,7 +458,7 @@ def scryfall_cards(scryfall_ids):
             with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
                 found.update((card["id"], card) for card in json.load(resp)["data"])
         except urllib.error.HTTPError as e:
-            if e.code != 400:  # 400 = malformed identifiers; leave them unfound
+            if e.code != 400:
                 raise ScryfallUnavailable from e
         except (urllib.error.URLError, TimeoutError, ValueError, KeyError) as e:
             raise ScryfallUnavailable from e
@@ -492,7 +471,7 @@ def card_image(card):
 
 
 def get_or_create_mtg_cards(items):
-    """Map [(scryfall_id, finish), ...] to cards.id values, creating missing rows from Scryfall data."""
+    """[(scryfall_id, finish), ...] -> [cards.id, ...]; raises ValueError with a message for the user."""
     db = get_db()
     ids = {}
     for sid, finish in items:
@@ -505,7 +484,7 @@ def get_or_create_mtg_cards(items):
     missing = [item for item in items if item not in ids]
     if missing:
         try:
-            fetched = scryfall_cards([sid for sid, _ in missing])
+            fetched = scryfall_cards([sid for sid, _finish in missing])
         except ScryfallUnavailable:
             raise ValueError(_("Couldn't reach Scryfall, try again in a moment."))
         for sid, finish in missing:
@@ -527,10 +506,7 @@ def get_or_create_mtg_cards(items):
 
 
 def parse_cart(form):
-    """Read the card lines of a new-loan form; returns ([(scryfall_id, finish, qty, any_printing), ...], error).
-
-    `any_printing` lines ("Any version", wanted cards only) still name a printing: it stands in for the card.
-    """
+    """Returns ([(scryfall_id, finish, qty, any_printing), ...], error)."""
     ids, finishes, quantities = form.getlist("scryfall_id"), form.getlist("finish"), form.getlist("quantity")
     anys = form.getlist("any_printing") or ["0"] * len(ids)
     if not (len(ids) == len(finishes) == len(quantities) == len(anys)):
@@ -548,7 +524,6 @@ def parse_cart(form):
             qty = 0
         if not 1 <= qty <= 99:
             return [], _("Quantity must be between 1 and 99.")
-        # The same printing+finish added twice becomes one line.
         key = (sid, finish, any_printing == "1")
         lines[key] = min(99, lines.get(key, 0) + qty)
     if not lines:
@@ -559,7 +534,7 @@ def parse_cart(form):
     return [(sid, finish, qty, any_printing) for (sid, finish, any_printing), qty in lines.items()], None
 
 
-# --- ledger -----------------------------------------------------------------
+# --- ledger ---
 
 def get_or_create_user_by_username(username):
     db = get_db()
@@ -570,7 +545,6 @@ def get_or_create_user_by_username(username):
 
 
 def add_contacts(db, a, b):
-    """Record that two people traded (both directions), so they see each other's Missing cards."""
     db.execute("INSERT INTO contacts (user_id, contact_id) VALUES (%s, %s), (%s, %s) ON CONFLICT DO NOTHING",
                (a, b, b, a))
 
@@ -612,10 +586,8 @@ def ago(ts):
 
 
 def group_by_person(loans, role, returned_counts):
-    """Group loans by the other party (`role` is 'lender' or 'borrower'), most cards outstanding first.
-
-    `returned_counts` maps person id -> number of returned records still in the viewer's ledger.
-    """
+    """Group by the other party (`role`: 'lender' or 'borrower'), most cards still out first.
+    `returned_counts`: person id -> returned rows the viewer hasn't cleared."""
     groups = {}
     for loan in loans:
         pid = loan[f"{role}_id"]
@@ -632,7 +604,7 @@ def group_by_person(loans, role, returned_counts):
         if loan["status"] == "borrowed":
             group["out"] += loan["quantity"]
     for group in groups.values():
-        # Outstanding cards bundled per original loan, newest first (rows arrive sorted by date).
+        # Rows come in newest first, so batches do too.
         batches = {}
         for loan in group["loans"]:
             if loan["status"] == "borrowed":
@@ -677,7 +649,7 @@ def index():
                   COALESCE(SUM(quantity) FILTER (WHERE borrower_id = %(me)s), 0) AS borrowed_cards,
                   COUNT(DISTINCT lender_id) FILTER (WHERE borrower_id = %(me)s) AS borrowed_people
            FROM loans WHERE status = 'borrowed' AND %(me)s IN (lender_id, borrower_id)""",
-        {"me": g.user["id"]},
+        {"me": me},
     ).fetchone()
     return render_template(
         "index.html",
@@ -692,13 +664,12 @@ def index():
 @app.route("/people/<int:person_id>")
 @login_required
 def person_page(person_id):
-    """Everything between the current user and one person: what you lent them and what you borrowed."""
     me = g.user["id"]
     if person_id == me:
         return redirect(url_for("index"))
     db = get_db()
     params = {"me": me, "p": person_id}
-    # Only people you have (or had) loans with; no browsing of other users.
+    # No browsing other users: only people you've had loans with.
     if not db.execute(
         """SELECT 1 FROM loans WHERE (lender_id = %(me)s AND borrower_id = %(p)s)
                                   OR (lender_id = %(p)s AND borrower_id = %(me)s) LIMIT 1""",
@@ -756,7 +727,6 @@ def new_loan():
         other = form.get("other", "").strip().lstrip("@")
         lines, error = parse_cart(form)
 
-        # "missing" (lent out, but to whom?) and "wanted" (looking to borrow) go on the board, not to a person.
         on_board = direction in BOARD_TABLES
         if direction not in ("lent", "borrowed") and not on_board:
             error = _("Choose whether you lent or borrowed the cards.")
@@ -801,7 +771,6 @@ def new_loan():
         db.rollback()
         flash(error, "error")
 
-    # People you've dealt with, most recent first, offered as quick picks.
     people = db.execute(
         """SELECT u.username, u.first_name, u.photo_url, MAX(l.created_at) AS last
            FROM loans l JOIN users u ON u.id = CASE WHEN l.lender_id = %(me)s THEN l.borrower_id ELSE l.lender_id END
@@ -813,20 +782,18 @@ def new_loan():
     return render_template("new_loan.html", people=people, finishes=FINISHES, prefill=prefill)
 
 
-# --- the board: missing and wanted cards ---------------------------------------------
-# Two tabs with the same shape: cards people post for their contacts to see, one row per owner + card.
-# Missing = lent out, lost track of to whom; Wanted ("Looking for") = would like to borrow.
+# --- the board ---
+# Missing: lent out, but to whom? Looking for (wanted): would like to borrow.
+# Both tabs are shown to the owner's contacts.
 
 BOARD_TABLES = {"missing": "missing_cards", "wanted": "wanted_cards"}
-# Cards the viewer sees: their own and those of contacts they haven't hidden.
 BOARD_VISIBLE = "(owner_id = %(me)s OR owner_id IN (SELECT contact_id FROM contacts WHERE user_id = %(me)s AND NOT hidden))"
 
 
 def post_to_board(tab, card_id, qty, any_printing=False):
-    """Add copies to the viewer's Missing or Looking-for list, adding up with what's already there."""
     db, me = get_db(), g.user["id"]
     if any_printing:
-        # "Any version" requests are one per card name, whichever printing stood in for it.
+        # One "any version" request per card name, whichever printing was picked.
         if db.execute(
             """UPDATE wanted_cards w SET quantity = w.quantity + %(qty)s FROM cards c, cards new
                WHERE w.owner_id = %(me)s AND w.any_printing AND c.id = w.card_id AND new.id = %(card)s
@@ -850,14 +817,12 @@ def post_to_board(tab, card_id, qty, any_printing=False):
 @app.route("/missing")
 @login_required
 def missing():
-    """Cards your contacts lent out and lost track of, so you can check whether you have one."""
     return render_board("missing")
 
 
 @app.route("/wanted")
 @login_required
 def wanted():
-    """Cards your contacts would like to borrow, so you can offer yours."""
     return render_board("wanted")
 
 
@@ -880,7 +845,7 @@ def render_board(tab):
         group["cards"].append(row)
         group["total"] += row["quantity"]
     ordered = sorted(groups.values(), key=lambda grp: (grp["id"] != me, -grp["total"]))
-    # Offers the viewer may see: all offers on their own wanted cards, and their own offers on others'.
+    # Offers on my requests, and my offers on other people's. Not other people's offers to each other.
     offers = {}
     if tab == "wanted":
         for offer in db.execute(
@@ -909,7 +874,7 @@ def render_board(tab):
 
 @app.context_processor
 def inject_pending_offers():
-    """Offers waiting on the viewer's wanted cards, flagged on the board link in the top bar."""
+    # For the dot on the board link in the top bar.
     if not g.get("user"):
         return {}
     return {"pending_offers": get_db().execute(
@@ -919,14 +884,14 @@ def inject_pending_offers():
 
 
 def visible_to_me(owner_id):
-    """Whether the viewer sees this owner's board cards (a contact they haven't hidden)."""
     return get_db().execute(
         "SELECT 1 FROM contacts WHERE user_id = %s AND contact_id = %s AND NOT hidden", (g.user["id"], owner_id)
     ).fetchone() is not None
 
 
 def take_missing(missing_id, requested):
-    """Lock a Missing-board row and take `requested` copies off it (None = all); returns (row, quantity taken)."""
+    """Take `requested` copies (None = all) off a Missing row; returns (row, copies taken).
+    The caller commits, or rolls back if the viewer turns out not to be allowed."""
     db = get_db()
     row = db.execute(
         """SELECT m.*, c.name AS card_name, u.username, u.first_name
@@ -947,7 +912,7 @@ def take_missing(missing_id, requested):
 @app.route("/missing/<int:missing_id>/claim", methods=["POST"])
 @login_required
 def claim_missing(missing_id):
-    """"It's with me": the card moves off the board into both ledgers, borrowed by the viewer from its owner."""
+    # "It's with me": becomes a loan from the owner to the claimer.
     row, qty = take_missing(missing_id, parse_quantity(request.form.get("quantity")))
     me = g.user["id"]
     if row["owner_id"] == me:
@@ -971,7 +936,6 @@ def claim_missing(missing_id):
 @app.route("/missing/<int:missing_id>/found", methods=["POST"])
 @login_required
 def found_missing(missing_id):
-    """The owner found it (or remembered who has it): take it off the board."""
     row, _qty = take_missing(missing_id, parse_quantity(request.form.get("quantity")))
     if row["owner_id"] != g.user["id"]:
         get_db().rollback()
@@ -984,7 +948,6 @@ def found_missing(missing_id):
 @app.route("/board/people/<int:person_id>/<any(hide, show):action>", methods=["POST"])
 @login_required
 def toggle_board_person(person_id, action):
-    """Stop (or start again) seeing one contact's cards on the board (both tabs)."""
     db = get_db()
     row = db.execute(
         """UPDATE contacts SET hidden = %s WHERE user_id = %s AND contact_id = %s
@@ -999,7 +962,7 @@ def toggle_board_person(person_id, action):
     return back_or_index()
 
 
-# --- wanted cards and offers ----------------------------------------------------------
+# --- wanted cards and offers ---
 
 def wanted_or_404(wanted_id):
     row = get_db().execute(
@@ -1016,7 +979,7 @@ def wanted_or_404(wanted_id):
 @app.route("/wanted/<int:wanted_id>/offer", methods=["POST"])
 @login_required
 def offer_wanted(wanted_id):
-    """"I can lend it": offer copies to the requester, who confirms before anything is recorded."""
+    # Nothing goes in the ledger until the requester accepts.
     row, me = wanted_or_404(wanted_id), g.user["id"]
     if row["owner_id"] == me:
         abort(400)
@@ -1027,7 +990,7 @@ def offer_wanted(wanted_id):
     db = get_db()
     card_id = None
     if row["any_printing"]:
-        # Any version will do: the lender says which printing and finish they're lending.
+        # The lender picks the printing.
         sid, finish = request.form.get("scryfall_id", "").strip(), request.form.get("finish")
         if not sid or finish not in FINISHES:
             abort(400)
@@ -1040,7 +1003,7 @@ def offer_wanted(wanted_id):
         name = db.execute("SELECT name FROM cards WHERE id = %s", (card_id,)).fetchone()["name"]
         if name.lower() != row["card_name"].lower():
             db.rollback()
-            abort(400)  # a printing of some other card
+            abort(400)
     db.execute(
         """INSERT INTO wanted_offers (wanted_id, lender_id, card_id, quantity) VALUES (%s, %s, %s, %s)
            ON CONFLICT (wanted_id, lender_id) DO UPDATE SET card_id = EXCLUDED.card_id, quantity = EXCLUDED.quantity""",
@@ -1063,7 +1026,6 @@ def withdraw_offer(wanted_id):
 @app.route("/wanted/<int:wanted_id>/remove", methods=["POST"])
 @login_required
 def remove_wanted(wanted_id):
-    """The requester doesn't need it any more (offers on it go too)."""
     if wanted_or_404(wanted_id)["owner_id"] != g.user["id"]:
         abort(403)
     db = get_db()
@@ -1074,7 +1036,7 @@ def remove_wanted(wanted_id):
 
 
 def own_offer_or_404(offer_id):
-    """Lock an offer on one of the viewer's wanted cards (and that card)."""
+    # Locks the offer and the request it's for.
     row = get_db().execute(
         """SELECT o.id, o.wanted_id, o.lender_id, o.quantity, w.owner_id, w.quantity AS wanted_quantity,
                   COALESCE(o.card_id, w.card_id) AS loan_card_id, c.name AS card_name, u.username, u.first_name
@@ -1092,9 +1054,8 @@ def own_offer_or_404(offer_id):
 @app.route("/offers/<int:offer_id>/accept", methods=["POST"])
 @login_required
 def accept_offer(offer_id):
-    """The requester takes the offer: it becomes a loan (offerer -> requester) and comes off their list."""
     offer, me, db = own_offer_or_404(offer_id), g.user["id"], get_db()
-    qty = min(offer["quantity"], offer["wanted_quantity"])  # the request may have shrunk since the offer
+    qty = min(offer["quantity"], offer["wanted_quantity"])  # the request may have shrunk since
     db.execute(
         """INSERT INTO loans (card_id, lender_id, borrower_id, quantity, created_by, batch_id)
            VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -1130,15 +1091,14 @@ def own_loan_or_404(loan_id):
 
 
 def return_loans(requested):
-    """Mark cards returned. `requested` maps loan id -> quantity coming back (None = all of it).
+    """`requested`: loan id -> copies coming back (None = all). Returns the number of cards returned.
 
-    Returning part of a row splits it: the row keeps the cards still out and a new 'returned' row with
-    the same card, people, loan date and batch records the rest. Everything happens in one transaction;
-    any loan the user isn't part of aborts the whole request. Returns the number of cards returned.
+    A partial return splits the row: it keeps what's still out, and a new 'returned' row with the same
+    card, people, date and batch takes the rest.
     """
     db = get_db()
     total = 0
-    for loan_id in sorted(requested):  # consistent lock order
+    for loan_id in sorted(requested):  # lock in a fixed order so two requests can't deadlock
         loan = db.execute("SELECT * FROM loans WHERE id = %s FOR UPDATE", (loan_id,)).fetchone()
         if loan is None or g.user["id"] not in (loan["lender_id"], loan["borrower_id"]):
             db.rollback()
@@ -1150,7 +1110,7 @@ def return_loans(requested):
         if qty == loan["quantity"]:
             db.execute("UPDATE loans SET status = 'returned', returned_at = now() WHERE id = %s", (loan_id,))
         else:
-            # Older rows may predate batch ids; give the pair one so an undo can merge them back.
+            # Rows from before batch ids existed need one, or reopen() can't fold the halves back together.
             db.execute(
                 "UPDATE loans SET quantity = quantity - %s, batch_id = COALESCE(batch_id, gen_random_uuid()) "
                 "WHERE id = %s",
@@ -1192,7 +1152,7 @@ def mark_returned(loan_id):
 @app.route("/returns", methods=["POST"])
 @login_required
 def mark_several_returned():
-    """Return several cards at once: repeated `loan_id` fields, each with an optional `qty_<id>`."""
+    # Form: repeated loan_id fields, each with an optional qty_<id>.
     requested = {}
     for raw in request.form.getlist("loan_id"):
         try:
@@ -1214,7 +1174,7 @@ def reopen(loan_id):
     db = get_db()
     loan = db.execute("SELECT * FROM loans WHERE id = %s FOR UPDATE", (loan_id,)).fetchone()
     if loan["status"] == "returned":
-        # Undoing a partial return: fold the cards back into the row that's still out, if there is one.
+        # Undoing a partial return: fold it back into the row that's still out.
         sibling = None
         if loan["batch_id"]:
             sibling = db.execute(
@@ -1241,11 +1201,8 @@ def reopen(loan_id):
 @app.route("/people/<int:person_id>/clear-returned", methods=["POST"])
 @login_required
 def clear_returned(person_id):
-    """Remove returned records with one person from the current user's ledger.
-
-    The other side keeps their copy (so nobody can erase a loan by marking it returned and deleting it);
-    rows that both sides have cleared are deleted for good.
-    """
+    # Only hides the rows on my side: otherwise a borrower could mark a loan returned and erase the
+    # lender's record of it. A row is deleted once both sides have cleared it.
     side = request.form.get("direction")
     if side not in ("lent", "borrowed"):
         abort(400)
@@ -1276,11 +1233,7 @@ def delete_loan(loan_id):
     return back_or_index()
 
 
-
-# --- admin ---------------------------------------------------------------------------
-
-app.jinja_env.globals["is_admin"] = is_admin
-
+# --- admin ---
 
 def admin_log(db, action, **details):
     db.execute("INSERT INTO admin_log (admin_id, action, details) VALUES (%s, %s, %s)",
@@ -1362,7 +1315,7 @@ def admin_merge(user_id):
         flash(_("No user @{username}.", username=target_name), "error")
     elif db.execute("SELECT 1 FROM loans WHERE (lender_id, borrower_id) IN ((%s, %s), (%s, %s)) LIMIT 1",
                     (user_id, target["id"], target["id"], user_id)).fetchone():
-        # Merging would turn their loans with each other into loans with oneself.
+        # Their loans to each other would become loans to oneself.
         flash(_("@{a} and @{b} have loans with each other, so they can’t be merged.",
                 a=placeholder["username"], b=target["username"]), "error")
     else:
@@ -1408,7 +1361,6 @@ def admin_delete_loan(loan_id):
 @app.route("/admin/backup", methods=["POST"])
 @admin_required
 def admin_backup():
-    import backup
     db = get_db()
     try:
         summary = backup.run_backup()

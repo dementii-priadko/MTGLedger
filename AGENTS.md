@@ -126,8 +126,8 @@ DEV_LOGIN=1 SECRET_KEY=dev .venv/bin/python app.py   # http://localhost:3000, us
 
 - Push to `main` → CI runs tests and a Docker build → deploy job rsyncs the repo to
   `/opt/ledger.beznadijka.dev` on the server and runs `docker compose -p ledger up -d --build`, then
-  health-checks `/login`. Deploy secrets are GitHub repository secrets (`DEPLOY_SSH_KEY`,
-  `DEPLOY_KNOWN_HOSTS`).
+  health-checks `/login`. Deploy secrets are GitHub repository secrets (`DEPLOY_HOST`,
+  `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`).
 - The server's `.env` (bot token, `SECRET_KEY`, Postgres password, backup recipient) lives only on the
   server; rsync excludes it. Never commit `.env` or secrets.
 - The host runs nginx (TLS via certbot) proxying to `127.0.0.1:3000`, alongside other unrelated apps.

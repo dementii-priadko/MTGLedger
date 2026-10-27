@@ -9,7 +9,7 @@ from test_app import lend, signed
 @pytest.fixture
 def admin(make_client):
     client = make_client()
-    payload = {"id": "8017026444", "first_name": "Dem", "username": "beznadijka", "auth_date": str(int(time.time()))}
+    payload = {"id": "111111111", "first_name": "Admin", "username": "admin_user", "auth_date": str(int(time.time()))}
     assert client.get("/auth/telegram", query_string=signed(payload)).headers["Location"] == "/"
     return client
 
@@ -40,7 +40,7 @@ def test_admin_overview(admin):
     lend(admin, other="@bob", quantity="3")
     page = admin.get("/admin").get_data(as_text=True)
     assert "Admin panel" in admin.get("/").get_data(as_text=True)          # menu link
-    assert "@beznadijka" in page and "@bob" in page and "placeholder" in page and "Lightning Bolt" in page
+    assert "@admin_user" in page and "@bob" in page and "placeholder" in page and "Lightning Bolt" in page
     assert '<span class="stat-value">3</span><span class="muted">Cards out</span>' in page
 
 
@@ -114,4 +114,4 @@ def test_manual_backup(admin, monkeypatch, query):
 
 
 def test_admin_ids_parsing(monkeypatch):
-    assert ledger.ADMIN_TELEGRAM_IDS == {8017026444}
+    assert ledger.ADMIN_TELEGRAM_IDS == {111111111}

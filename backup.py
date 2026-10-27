@@ -61,7 +61,7 @@ ACTIVE_LOANS = """
 
 
 def safe_cell(value):
-    """Stop spreadsheet apps from treating user-provided text as a formula."""
+    # Keep spreadsheets from running user-provided text as a formula.
     if value is None:
         return ""
     if isinstance(value, datetime):
@@ -76,12 +76,8 @@ def build_csv(rows):
     writer.writerow(COLUMNS)
     for row in rows:
         writer.writerow([safe_cell(row[col]) for col in COLUMNS])
-    # BOM so Excel opens it as UTF-8 (names may be in Cyrillic).
-    return ("﻿" + out.getvalue()).encode("utf-8")
-
-
-def fetch_active_loans(db):
-    return db.execute(ACTIVE_LOANS).fetchall()
+    # Without the BOM, Excel reads it as cp1251/latin-1 and garbles Cyrillic names.
+    return out.getvalue().encode("utf-8-sig")
 
 
 def resolve_chat_id(db):
@@ -131,14 +127,13 @@ def send_document(chat_id, filename, content, caption):
 
 
 def run_backup():
-    """Build today's CSV and send it. Returns a short summary."""
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as db:
         chat_id = resolve_chat_id(db)
         if chat_id is None:
             raise RuntimeError("No recipient: set BACKUP_TELEGRAM_USERNAME or BACKUP_CHAT_ID")
-        rows = fetch_active_loans(db)
+        rows = db.execute(ACTIVE_LOANS).fetchall()
     today = datetime.now(TZ).date().isoformat()
     cards = sum(r["quantity"] for r in rows)
     caption = f"Card Ledger backup · {today}\n{len(rows)} active loan rows · {cards} cards out"
@@ -175,7 +170,7 @@ def daemon():
     while True:
         target = next_run(datetime.now(TZ), at)
         log.info("next backup at %s", target.isoformat())
-        # Sleep in short steps so clock jumps / suspends don't skew the schedule much.
+        # Short naps, so a suspended host or a clock change doesn't push the backup back by hours.
         while (remaining := (target - datetime.now(TZ)).total_seconds()) > 0:
             time.sleep(min(remaining, 300))
         backup_with_retries()
@@ -195,7 +190,7 @@ def main():
         print(run_backup())
     else:
         with psycopg.connect(DATABASE_URL, row_factory=dict_row) as db:
-            sys.stdout.buffer.write(build_csv(fetch_active_loans(db)))
+            sys.stdout.buffer.write(build_csv(db.execute(ACTIVE_LOANS).fetchall()))
 
 
 if __name__ == "__main__":
